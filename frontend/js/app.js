@@ -757,6 +757,8 @@ async function handleReceiptUpload(event) {
                         showNotification(`Проверьте сумму в ${file.name} (вне диапазона)`, 'error');
                     } else if (result.warnings.includes('amount_invalid')) {
                         showNotification(`Проверьте сумму в ${file.name} (некорректная)`, 'error');
+                    } else if (result.warnings.includes('amount_missing')) {
+                        showNotification(`Сумма не распознана: ${file.name}. Введите вручную.`, 'error');
                     }
                 }
 

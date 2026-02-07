@@ -178,6 +178,7 @@ async def upload_receipt(
             qr_data['amount'] = None
 
     if not qr_data or qr_data.get('amount') is None:
+        warnings.append("amount_missing")
         logger.warning("[UPLOAD] Amount not detected for file %s", file_path)
 
     # Получаем относительный путь для БД

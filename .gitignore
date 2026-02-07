@@ -1,5 +1,6 @@
 # Временные файлы
 tmpclaude-*.cwd
+tmpclaude-*
 *.err
 *.log
 *.tmp
@@ -44,6 +45,20 @@ wheels/
 # Загруженные файлы
 uploads/
 outputs/
+
+# Диагностические/временные артефакты
+debug_*.png
+debug_*.py
+test_*.py
+check_*.py
+cleanup_*.py
+frontend/js/*.backup
+frontend/js/app.js.backup
+frontend/js/tmpclaude-*
+backend/**/tmpclaude-*
+SZ_DEBUG.docx
+trip_*.zip
+nul
 
 # Логи
 *.log
