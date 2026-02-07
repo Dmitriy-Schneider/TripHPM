@@ -3,6 +3,7 @@ const API_URL = window.location.origin;
 let authToken = localStorage.getItem('authToken');
 let currentUser = null;
 let currentTripId = null;
+let allTrips = [];
 
 // ========== СИСТЕМА ЛОГИРОВАНИЯ ==========
 
@@ -96,6 +97,22 @@ document.addEventListener('DOMContentLoaded', () => {
             toggleCustomCategory(editReceiptCategory, editReceiptCategoryCustomGroup);
         });
     }
+
+    const filterCity = document.getElementById('filterCity');
+    const filterOrg = document.getElementById('filterOrg');
+    const filterDateFrom = document.getElementById('filterDateFrom');
+    const filterDateTo = document.getElementById('filterDateTo');
+
+    [filterCity, filterOrg].forEach((el) => {
+        if (el) {
+            el.addEventListener('input', applyTripFilters);
+        }
+    });
+    [filterDateFrom, filterDateTo].forEach((el) => {
+        if (el) {
+            el.addEventListener('change', applyTripFilters);
+        }
+    });
 });
 
 // Проверка авторизации
@@ -307,7 +324,8 @@ async function loadTrips() {
                 }
                 return (b.id || 0) - (a.id || 0);
             });
-            displayTrips(trips);
+            allTrips = trips;
+            applyTripFilters();
         } else {
             showNotification('Ошибка загрузки командировок', 'error');
         }
@@ -362,6 +380,56 @@ function displayTrips(trips) {
             </div>
         </div>
     `).join('');
+}
+
+function applyTripFilters() {
+    const filterCity = document.getElementById('filterCity');
+    const filterOrg = document.getElementById('filterOrg');
+    const filterDateFrom = document.getElementById('filterDateFrom');
+    const filterDateTo = document.getElementById('filterDateTo');
+
+    const cityValue = (filterCity?.value || '').trim().toLowerCase();
+    const orgValue = (filterOrg?.value || '').trim().toLowerCase();
+    const dateFromValue = filterDateFrom?.value || '';
+    const dateToValue = filterDateTo?.value || '';
+
+    const dateFrom = dateFromValue ? new Date(dateFromValue) : null;
+    const dateTo = dateToValue ? new Date(dateToValue) : null;
+    if (dateTo) {
+        dateTo.setHours(23, 59, 59, 999);
+    }
+
+    const filtered = allTrips.filter((trip) => {
+        const city = (trip.destination_city || '').toLowerCase();
+        const org = (trip.destination_org || '').toLowerCase();
+
+        if (cityValue && !city.includes(cityValue)) return false;
+        if (orgValue && !org.includes(orgValue)) return false;
+
+        const tripStart = trip.date_from ? new Date(trip.date_from) : null;
+        const tripEnd = trip.date_to ? new Date(trip.date_to) : null;
+
+        if (dateFrom && tripEnd && tripEnd < dateFrom) return false;
+        if (dateTo && tripStart && tripStart > dateTo) return false;
+
+        return true;
+    });
+
+    displayTrips(filtered);
+}
+
+function resetTripFilters() {
+    const filterCity = document.getElementById('filterCity');
+    const filterOrg = document.getElementById('filterOrg');
+    const filterDateFrom = document.getElementById('filterDateFrom');
+    const filterDateTo = document.getElementById('filterDateTo');
+
+    if (filterCity) filterCity.value = '';
+    if (filterOrg) filterOrg.value = '';
+    if (filterDateFrom) filterDateFrom.value = '';
+    if (filterDateTo) filterDateTo.value = '';
+
+    applyTripFilters();
 }
 
 // Форматирование даты

@@ -60,6 +60,35 @@
                 </button>
             </div>
 
+            <!-- Фильтры командировок -->
+            <div class="filters-bar">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Город</label>
+                        <input type="text" id="filterCity" placeholder="Например: Самара">
+                    </div>
+                    <div class="form-group">
+                        <label>Организация</label>
+                        <input type="text" id="filterOrg" placeholder="Например: ООО Партнер">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Дата с</label>
+                        <input type="date" id="filterDateFrom">
+                    </div>
+                    <div class="form-group">
+                        <label>Дата по</label>
+                        <input type="date" id="filterDateTo">
+                    </div>
+                    <div class="form-group" style="align-self: flex-end;">
+                        <button type="button" onclick="resetTripFilters()" class="btn btn-secondary btn-small">
+                            Сброс
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Список командировок -->
             <div id="tripsList" class="trips-list">
                 <!-- Будет заполнено через JS -->
