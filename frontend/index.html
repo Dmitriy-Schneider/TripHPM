@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Система отчетов о командировках</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <!-- Навигация -->
+    <nav class="navbar">
+        <div class="container">
+            <div class="nav-brand">
+                <h1>📋 Отчеты о командировках</h1>
+            </div>
+            <div class="nav-user" id="navUser" style="display: none;">
+                <span id="userInfo"></span>
+                <button onclick="logout()" class="btn btn-secondary">Выход</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Форма входа/регистрации -->
+        <div id="authSection" class="auth-section">
+            <div class="auth-card">
+                <h2>Вход в систему</h2>
+
+                <!-- Форма входа -->
+                <form id="loginForm" onsubmit="handleLogin(event)" style="display: block;">
+                    <div class="form-group">
+                        <label>Логин</label>
+                        <input type="text" id="loginUsername" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Пароль</label>
+                        <input type="password" id="loginPassword" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">Войти</button>
+                </form>
+
+                <!-- Быстрый вход для тестирования -->
+                <div style="text-align: center; margin-top: 20px; padding-top: 20px; border-top: 2px solid #eee;">
+                    <p style="color: #888; font-size: 13px; margin-bottom: 10px;">Для тестирования системы:</p>
+                    <button type="button" onclick="quickTestLogin()" class="btn btn-secondary btn-block">
+                        🚀 Быстрый вход (test/test)
+                    </button>
+                </div>
+
+                <div id="authError" class="error-message" style="display: none;"></div>
+            </div>
+        </div>
+
+        <!-- Основной интерфейс -->
+        <div id="mainSection" style="display: none;">
+            <!-- Кнопка создания командировки -->
+            <div class="action-bar">
+                <button onclick="showCreateTripModal()" class="btn btn-primary">
+                    ➕ Новая командировка
+                </button>
+            </div>
+
+            <!-- Список командировок -->
+            <div id="tripsList" class="trips-list">
+                <!-- Будет заполнено через JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно создания командировки -->
+    <div id="createTripModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Новая командировка</h2>
+                <span class="close" onclick="closeCreateTripModal()">&times;</span>
+            </div>
+            <form id="createTripForm" onsubmit="handleCreateTrip(event)">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Город назначения *</label>
+                        <input type="text" id="tripCity" placeholder="Москва" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Организация</label>
+                        <input type="text" id="tripOrg" placeholder="ООО Партнер">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Дата отправления *</label>
+                        <input type="date" id="tripDateFrom" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Дата возвращения *</label>
+                        <input type="date" id="tripDateTo" required>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Время отправления</label>
+                        <input type="time" id="tripDepartureTime" value="09:00">
+                    </div>
+                    <div class="form-group">
+                        <label>Время прибытия</label>
+                        <input type="time" id="tripArrivalTime" value="18:00">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Цель командировки *</label>
+                    <textarea id="tripPurpose" rows="3" placeholder="Описание цели командировки" required>Участие в переговорах по качеству поставляемой стали и условиях поставки</textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Аванс (руб)</label>
+                        <input type="number" id="tripAdvance" step="0.01" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>Ставка суточных (руб)</label>
+                        <input type="number" id="tripPerDiem" step="0.01" value="2000">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Количество приемов пищи</label>
+                    <div class="meals-group">
+                        <div class="meal-item">
+                            <label>Завтраки</label>
+                            <input type="number" id="tripBreakfast" value="0" min="0">
+                        </div>
+                        <div class="meal-item">
+                            <label>Обеды</label>
+                            <input type="number" id="tripLunch" value="0" min="0">
+                        </div>
+                        <div class="meal-item">
+                            <label>Ужины</label>
+                            <input type="number" id="tripDinner" value="0" min="0">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" onclick="closeCreateTripModal()" class="btn btn-secondary">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Создать</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Модальное окно редактирования командировки -->
+    <div id="editTripModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Редактировать командировку</h2>
+                <span class="close" onclick="closeEditTripModal()">&times;</span>
+            </div>
+            <form id="editTripForm" onsubmit="handleEditTrip(event)">
+                <input type="hidden" id="editTripId">
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Город назначения *</label>
+                        <input type="text" id="editTripCity" placeholder="Москва" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Организация</label>
+                        <input type="text" id="editTripOrg" placeholder="ООО Партнер">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Дата отправления *</label>
+                        <input type="date" id="editTripDateFrom" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Дата возвращения *</label>
+                        <input type="date" id="editTripDateTo" required>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Время отправления</label>
+                        <input type="time" id="editTripDepartureTime">
+                    </div>
+                    <div class="form-group">
+                        <label>Время прибытия</label>
+                        <input type="time" id="editTripArrivalTime">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Цель командировки *</label>
+                    <textarea id="editTripPurpose" rows="3" placeholder="Описание цели командировки" required></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Аванс (руб)</label>
+                        <input type="number" id="editTripAdvance" step="0.01">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Количество приемов пищи</label>
+                    <div class="meals-group">
+                        <div class="meal-item">
+                            <label>Завтраки</label>
+                            <input type="number" id="editTripBreakfast" min="0">
+                        </div>
+                        <div class="meal-item">
+                            <label>Обеды</label>
+                            <input type="number" id="editTripLunch" min="0">
+                        </div>
+                        <div class="meal-item">
+                            <label>Ужины</label>
+                            <input type="number" id="editTripDinner" min="0">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" onclick="closeEditTripModal()" class="btn btn-secondary">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Сохранить изменения</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Модальное окно редактирования чека -->
+    <div id="editReceiptModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Редактировать чек</h2>
+                <span class="close" onclick="closeEditReceiptModal()">&times;</span>
+            </div>
+            <form id="editReceiptForm" onsubmit="handleEditReceipt(event)">
+                <input type="hidden" id="editReceiptId">
+
+                <div class="form-group">
+                    <label>Категория</label>
+                    <select id="editReceiptCategory" required>
+                        <option value="taxi">Такси</option>
+                        <option value="fuel">Топливо</option>
+                        <option value="airplane">Самолет</option>
+                        <option value="train">Поезд</option>
+                        <option value="bus">Автобус</option>
+                        <option value="hotel">Гостиница</option>
+                        <option value="other">Представительские</option>
+                        <option value="custom">Другое (ввести)</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="editReceiptCategoryCustomGroup" style="display: none;">
+                    <label>Свой тип документа</label>
+                    <input type="text" id="editReceiptCategoryCustom" placeholder="Например: Электричка">
+                </div>
+
+                <div class="form-group">
+                    <label>Сумма (руб)</label>
+                    <input type="number" id="editReceiptAmount" step="0.01" required>
+                </div>
+
+                <div class="form-group">
+                    <label>Дата</label>
+                    <input type="datetime-local" id="editReceiptDate">
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" onclick="closeEditReceiptModal()" class="btn btn-secondary">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Модальное окно просмотра командировки -->
+    <div id="viewTripModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2>Командировка #<span id="viewTripId"></span></h2>
+                <span class="close" onclick="closeViewTripModal()">&times;</span>
+            </div>
+            <div id="viewTripContent">
+                <!-- Информация о командировке -->
+                <div class="trip-info">
+                    <h3>Информация</h3>
+                    <div id="tripDetails"></div>
+                </div>
+
+                <!-- Чеки -->
+                <div class="receipts-section">
+                    <h3>Чеки</h3>
+                    <div class="upload-area">
+                        <input type="file" id="receiptFile" accept="image/*,application/pdf" multiple style="display: none;" onchange="handleReceiptUpload(event)">
+                        <button onclick="document.getElementById('receiptFile').click()" class="btn btn-secondary">
+                            📎 Загрузить чеки (можно несколько)
+                        </button>
+                        <select id="receiptCategory" class="category-select">
+                            <option value="taxi">Такси</option>
+                            <option value="fuel">Топливо</option>
+                            <option value="airplane">Самолет</option>
+                            <option value="train">Поезд</option>
+                            <option value="bus">Автобус</option>
+                            <option value="hotel">Гостиница</option>
+                            <option value="other">Представительские</option>
+                            <option value="custom">Другое (ввести)</option>
+                        </select>
+                    </div>
+                    <div class="form-row" id="receiptCategoryCustomGroup" style="display: none;">
+                        <div class="form-group" style="flex: 1;">
+                            <label>Свой тип документа</label>
+                            <input type="text" id="receiptCategoryCustom" placeholder="Например: Электричка">
+                        </div>
+                    </div>
+                    <div id="receiptsList" class="receipts-list">
+                        <!-- Список чеков -->
+                    </div>
+                </div>
+
+                <!-- Документы -->
+                <div class="documents-section">
+                    <h3>Документы</h3>
+                    <div class="action-buttons">
+                        <button onclick="showPreview()" class="btn btn-primary">
+                            👁️ Предпросмотр и генерация
+                        </button>
+                        <button onclick="downloadPackage()" class="btn btn-success" id="downloadBtn" style="display: none;">
+                            ⬇️ Скачать архив
+                        </button>
+                    </div>
+                    <div id="documentsStatus"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно прогресса загрузки -->
+    <div id="progressModal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2>Загрузка файлов</h2>
+            </div>
+            <div style="padding: 20px;">
+                <div id="progressText" style="margin-bottom: 15px; text-align: center; font-size: 16px;">
+                    Обработка файлов...
+                </div>
+                <div style="width: 100%; background-color: #f0f0f0; border-radius: 10px; overflow: hidden; height: 30px;">
+                    <div id="progressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #007bff, #0056b3); transition: width 0.3s;"></div>
+                </div>
+                <div id="progressDetails" style="margin-top: 10px; font-size: 14px; color: #666; text-align: center;">
+                    0 из 0 файлов
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно предпросмотра -->
+    <div id="previewModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2>Предпросмотр данных командировки</h2>
+                <span class="close" onclick="closePreviewModal()">&times;</span>
+            </div>
+            <div style="padding: 20px;">
+                <div id="previewContent"></div>
+
+                <div id="previewWarnings" style="margin-top: 20px;"></div>
+
+                <div class="modal-footer">
+                    <button type="button" onclick="closePreviewModal()" class="btn btn-secondary">Отмена</button>
+                    <button type="button" onclick="confirmGeneration()" class="btn btn-primary" id="confirmGenerateBtn">
+                        ✓ Создать документы
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Уведомления -->
+    <div id="notification" class="notification"></div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>
