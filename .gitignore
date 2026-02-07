@@ -45,6 +45,7 @@ wheels/
 # Загруженные файлы
 uploads/
 outputs/
+backup/
 
 # Диагностические/временные артефакты
 debug_*.png
