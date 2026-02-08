@@ -596,7 +596,7 @@ function displayTripDetails(trip) {
         </div>
         <div class="detail-row">
             <div class="detail-label">Аванс:</div>
-            <div class="detail-value">${trip.advance_rub} руб</div>
+            <div class="detail-value">${trip.advance_rub} ₽</div>
         </div>
         <div class="detail-row">
             <div class="detail-label">Питание:</div>
@@ -605,6 +605,24 @@ function displayTripDetails(trip) {
     `;
 
     document.getElementById('tripDetails').innerHTML = detailsHtml;
+
+    // Обновляем информацию об этапах
+    updateStageInfo(trip);
+
+    // Сбрасываем статусы и показываем первый таб
+    const tabPreTrip = document.getElementById('tabPreTrip');
+    const tabPostTrip = document.getElementById('tabPostTrip');
+    if (tabPreTrip) {
+        tabPreTrip.classList.remove('completed');
+        if (trip.pre_trip_docs_generated) tabPreTrip.classList.add('completed');
+    }
+    if (tabPostTrip) {
+        tabPostTrip.classList.remove('completed');
+        if (trip.post_trip_docs_generated) tabPostTrip.classList.add('completed');
+    }
+
+    // Показываем первый этап по умолчанию
+    showStage('pre-trip');
 
     // Загрузить чеки
     loadReceipts(trip.id);
@@ -639,7 +657,7 @@ function displayReceipts(receipts) {
     const receiptsList = document.getElementById('receiptsList');
 
     if (receipts.length === 0) {
-        receiptsList.innerHTML = '<p style="color: #888;">Нет загруженных чеков</p>';
+        receiptsList.innerHTML = '<p style="color: #888;">Нет загруженных документов</p>';
         return;
     }
 
@@ -649,20 +667,28 @@ function displayReceipts(receipts) {
     receiptsList.innerHTML = orderedReceipts.map(receipt => {
         const dateValue = receipt.receipt_date ? new Date(receipt.receipt_date).toISOString().slice(0, 10) : '';
         const amountValue = receipt.amount != null ? receipt.amount : '';
-        const orgValue = receipt.org_name || '';
         const displayCategory = getCategoryName(receipt.category);
-        const categoryValue = receipt.category || 'other';
+
+        // Определяем тип документа
+        const isWithoutAmount = receipt.document_type === 'boarding' || receipt.document_type === 'confirmation' || !receipt.requires_amount;
+        const docTypeLabel = isWithoutAmount ? '📄' : '💰';
+        const amountDisplay = isWithoutAmount ? '—' : `${receipt.amount || 0} ₽`;
+
         return `
-        <div class="receipt-item">
+        <div class="receipt-item" style="${isWithoutAmount ? 'background: #f0f8ff;' : ''}">
             <div class="receipt-info">
-                <span class="receipt-category">${displayCategory}</span>
+                <span class="receipt-category">${docTypeLabel} ${displayCategory}</span>
                 <span>${receipt.receipt_date ? formatDate(receipt.receipt_date) : 'Без даты'}</span>
                 ${receipt.has_qr ? ' ✓ QR' : ''}
+                ${isWithoutAmount ? '<span style="color: #888; font-size: 11px;"> (подтверждающий)</span>' : ''}
             </div>
-            <div class="receipt-amount">${receipt.amount || 0} ₽</div>
+            <div class="receipt-amount" style="${isWithoutAmount ? 'color: #888;' : ''}">${amountDisplay}</div>
             <div class="receipt-edit-inline">
                 <input type="text" class="receipt-input receipt-category-input" value="${displayCategory}" data-receipt-id="${receipt.id}" data-field="category" placeholder="Категория">
-                <input type="number" class="receipt-input receipt-amount-input" value="${amountValue}" data-receipt-id="${receipt.id}" data-field="amount" step="0.01" placeholder="Сумма">
+                ${isWithoutAmount
+                    ? '<input type="text" class="receipt-input" value="—" disabled style="background: #eee;">'
+                    : `<input type="number" class="receipt-input receipt-amount-input" value="${amountValue}" data-receipt-id="${receipt.id}" data-field="amount" step="0.01" placeholder="Сумма">`
+                }
                 <input type="date" class="receipt-input receipt-date-input" value="${dateValue}" data-receipt-id="${receipt.id}" data-field="receipt_date">
             </div>
             <div class="receipt-actions">
@@ -679,11 +705,10 @@ function getCategoryName(category) {
     const categories = {
         'taxi': 'Такси',
         'fuel': 'Топливо',
-        'airplane': 'Самолет',
+        'airplane': 'Самолёт',
         'train': 'Поезд',
         'bus': 'Автобус',
         'hotel': 'Гостиница',
-        'restaurant': 'Автобус',
         'other': 'Представительские'
     };
     return categories[category] || category;
@@ -712,6 +737,8 @@ async function handleReceiptUpload(event) {
 
     const categorySelect = document.getElementById('receiptCategory');
     const categoryCustomInput = document.getElementById('receiptCategoryCustom');
+    const documentTypeSelect = document.getElementById('documentType');
+
     let category = categorySelect ? categorySelect.value : 'other';
     if (category === 'custom') {
         const customValue = (categoryCustomInput ? categoryCustomInput.value : '').trim();
@@ -721,6 +748,9 @@ async function handleReceiptUpload(event) {
         }
         category = customValue;
     }
+
+    // Тип документа: fiscal (с суммой) или boarding (без суммы)
+    const documentType = documentTypeSelect ? documentTypeSelect.value : 'fiscal';
 
     // Загружаем все файлы по очереди
     let successCount = 0;
@@ -738,6 +768,7 @@ async function handleReceiptUpload(event) {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('category', category);
+        formData.append('document_type', documentType);
 
         try {
             const response = await fetch(`${API_URL}/receipts/trip/${tripId}/upload`, {
@@ -1599,4 +1630,444 @@ function getDaysWord(days) {
     }
 
     return 'дней';
+}
+
+// ==================== ЭТАПЫ КОМАНДИРОВКИ ====================
+
+/**
+ * Переключение между этапами ДО и ПОСЛЕ поездки
+ */
+function showStage(stage) {
+    const tabs = document.querySelectorAll('.stage-tab');
+    const contents = document.querySelectorAll('.stage-content');
+
+    tabs.forEach(tab => tab.classList.remove('active'));
+    contents.forEach(content => {
+        content.classList.remove('active');
+        content.style.display = 'none';
+    });
+
+    if (stage === 'pre-trip') {
+        document.getElementById('tabPreTrip').classList.add('active');
+        document.getElementById('stagePreTrip').classList.add('active');
+        document.getElementById('stagePreTrip').style.display = 'block';
+    } else {
+        document.getElementById('tabPostTrip').classList.add('active');
+        document.getElementById('stagePostTrip').classList.add('active');
+        document.getElementById('stagePostTrip').style.display = 'block';
+    }
+}
+
+/**
+ * Обновление информации об этапах в модальном окне
+ */
+function updateStageInfo(trip) {
+    // Устанавливаем даты по умолчанию = сегодня
+    const today = new Date().toISOString().split('T')[0];
+
+    const prikazInput = document.getElementById('prikazDateInput');
+    const szInput = document.getElementById('szDateInput');
+    const aoInput = document.getElementById('aoDateInput');
+
+    if (prikazInput) prikazInput.value = trip.prikaz_date || today;
+    if (szInput) szInput.value = trip.sz_date || today;
+    if (aoInput) aoInput.value = trip.ao_date || today;
+
+    // Сумма аванса
+    const preAdvance = document.getElementById('preAdvanceAmount');
+    if (preAdvance) preAdvance.textContent = `${trip.advance_rub || 0} ₽`;
+
+    // Обновляем статусы табов
+    const tabPreTrip = document.getElementById('tabPreTrip');
+    const tabPostTrip = document.getElementById('tabPostTrip');
+
+    if (tabPreTrip && trip.pre_trip_docs_generated) {
+        tabPreTrip.classList.add('completed');
+    }
+    if (tabPostTrip && trip.post_trip_docs_generated) {
+        tabPostTrip.classList.add('completed');
+    }
+
+    // Показываем кнопки скачивания если документы сгенерированы
+    const downloadPreBtn = document.getElementById('downloadPreBtn');
+    const downloadPostBtn = document.getElementById('downloadPostBtn');
+
+    if (downloadPreBtn) downloadPreBtn.style.display = trip.pre_trip_docs_generated ? 'inline-block' : 'none';
+    if (downloadPostBtn) downloadPostBtn.style.display = trip.post_trip_docs_generated ? 'inline-block' : 'none';
+}
+
+// ==================== ЭТАП 1: ДО ПОЕЗДКИ ====================
+
+/**
+ * Предпросмотр данных ДО поездки
+ */
+async function showPreviewPreTrip() {
+    if (!currentTripId) {
+        showNotification('Ошибка: не выбрана командировка', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_URL}/trips/${currentTripId}/preview-pre-trip`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            displayPreviewPreTrip(data);
+        } else {
+            const error = await response.json();
+            showNotification(error.detail || 'Ошибка получения данных', 'error');
+        }
+    } catch (error) {
+        console.error('Preview pre-trip error:', error);
+        showNotification('Ошибка соединения', 'error');
+    }
+}
+
+/**
+ * Отображение предпросмотра ДО поездки
+ */
+function displayPreviewPreTrip(data) {
+    const content = document.getElementById('previewPreTripContent');
+    const warnings = document.getElementById('previewPreTripWarnings');
+
+    content.innerHTML = `
+        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+            <h3 style="margin-top: 0;">📍 ${data.destination}</h3>
+            <p><strong>Организация:</strong> ${data.destination_org || 'Не указана'}</p>
+            <p><strong>Даты:</strong> ${data.dates}</p>
+            <p><strong>Цель:</strong> ${data.purpose}</p>
+        </div>
+
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+            <tr style="background: #e9ecef;">
+                <th style="padding: 10px; text-align: left; border: 1px solid #dee2e6;">Параметр</th>
+                <th style="padding: 10px; text-align: right; border: 1px solid #dee2e6;">Значение</th>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Количество дней</td>
+                <td style="padding: 10px; text-align: right; border: 1px solid #dee2e6;">${data.days}</td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Суточные (${data.per_diem_days.toFixed(1)} дней)</td>
+                <td style="padding: 10px; text-align: right; border: 1px solid #dee2e6;">${data.per_diem_total.toFixed(2)} ₽</td>
+            </tr>
+            <tr style="background: #fff3cd; font-weight: bold;">
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Запрашиваемый аванс</td>
+                <td style="padding: 10px; text-align: right; border: 1px solid #dee2e6;">${data.advance_rub.toFixed(2)} ₽</td>
+            </tr>
+        </table>
+
+        <div style="background: #e3f2fd; padding: 15px; border-radius: 8px;">
+            <p style="margin: 0;"><strong>Будут созданы документы:</strong></p>
+            <ul style="margin: 10px 0 0 0; padding-left: 20px;">
+                <li>Приказ (дата: ${data.prikaz_date})</li>
+                <li>Служебная записка на аванс (дата: ${data.sz_date})</li>
+            </ul>
+        </div>
+    `;
+
+    let warningsHtml = '';
+    if (data.warnings && data.warnings.length > 0) {
+        warningsHtml = `<div style="background: #fff3cd; border: 1px solid #ffeeba; padding: 15px; border-radius: 5px;">
+            <h4 style="color: #856404; margin-top: 0;">⚠️ Предупреждения:</h4>
+            <ul style="margin: 0; padding-left: 20px;">
+                ${data.warnings.map(w => `<li style="color: #856404;">${w}</li>`).join('')}
+            </ul>
+        </div>`;
+    }
+    warnings.innerHTML = warningsHtml;
+
+    document.getElementById('previewPreTripModal').style.display = 'block';
+}
+
+function closePreviewPreTripModal() {
+    document.getElementById('previewPreTripModal').style.display = 'none';
+}
+
+async function confirmGeneratePreTrip() {
+    closePreviewPreTripModal();
+    await generatePreTrip();
+}
+
+/**
+ * Генерация документов ДО поездки
+ */
+async function generatePreTrip() {
+    if (!currentTripId) {
+        showNotification('Ошибка: не выбрана командировка', 'error');
+        return;
+    }
+
+    // Сохраняем даты документов перед генерацией
+    const prikazDate = document.getElementById('prikazDateInput')?.value;
+    const szDate = document.getElementById('szDateInput')?.value;
+
+    if (prikazDate || szDate) {
+        await fetch(`${API_URL}/trips/${currentTripId}`, {
+            method: 'PUT',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                prikaz_date: prikazDate || null,
+                sz_date: szDate || null
+            })
+        });
+    }
+
+    try {
+        showNotification('Создание документов ДО поездки...', 'info');
+
+        const response = await fetch(`${API_URL}/trips/${currentTripId}/generate-pre-trip`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+
+        if (response.ok) {
+            const result = await response.json();
+            showNotification('Приказ и СЗ успешно созданы!', 'success');
+
+            const statusDiv = document.getElementById('preDocsStatus');
+            if (statusDiv) {
+                statusDiv.innerHTML = `
+                    <div style="background: #d4edda; padding: 15px; border-radius: 8px; margin-top: 15px;">
+                        <h4 style="color: #155724; margin: 0 0 10px 0;">✓ Документы готовы</h4>
+                        <ul style="margin: 0; padding-left: 20px; color: #155724;">
+                            ${result.documents.map(d => `<li>${d}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+
+            document.getElementById('downloadPreBtn').style.display = 'inline-block';
+            document.getElementById('tabPreTrip').classList.add('completed');
+        } else {
+            const error = await response.json();
+            showNotification(error.detail || 'Ошибка генерации', 'error');
+        }
+    } catch (error) {
+        console.error('Generate pre-trip error:', error);
+        showNotification('Ошибка соединения', 'error');
+    }
+}
+
+// ==================== ЭТАП 2: ПОСЛЕ ПОЕЗДКИ ====================
+
+/**
+ * Предпросмотр данных ПОСЛЕ поездки
+ */
+async function showPreviewPostTrip() {
+    if (!currentTripId) {
+        showNotification('Ошибка: не выбрана командировка', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_URL}/trips/${currentTripId}/preview-post-trip`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            displayPreviewPostTrip(data);
+        } else {
+            const error = await response.json();
+            showNotification(error.detail || 'Ошибка получения данных', 'error');
+        }
+    } catch (error) {
+        console.error('Preview post-trip error:', error);
+        showNotification('Ошибка соединения', 'error');
+    }
+}
+
+/**
+ * Отображение предпросмотра ПОСЛЕ поездки
+ */
+function displayPreviewPostTrip(data) {
+    const content = document.getElementById('previewPostTripContent');
+    const warnings = document.getElementById('previewPostTripWarnings');
+    const confirmBtn = document.getElementById('confirmGeneratePostBtn');
+
+    // Расходы по категориям
+    const expensesHtml = Object.entries(data.expenses_by_category).map(([cat, amount]) => {
+        return `<tr>
+            <td style="padding: 10px; border: 1px solid #dee2e6;">${getCategoryName(cat)}</td>
+            <td style="padding: 10px; text-align: right; border: 1px solid #dee2e6; font-weight: bold;">${amount.toFixed(2)} ₽</td>
+        </tr>`;
+    }).join('');
+
+    // Статус баланса
+    let balanceClass, balanceText;
+    if (data.to_return > 0) {
+        balanceClass = 'balance-positive';
+        balanceText = `К возврату: ${data.to_return.toFixed(2)} ₽`;
+    } else if (data.to_return < 0) {
+        balanceClass = 'balance-negative';
+        balanceText = `К доплате: ${Math.abs(data.to_return).toFixed(2)} ₽`;
+    } else {
+        balanceClass = 'balance-zero';
+        balanceText = 'Баланс: 0 ₽';
+    }
+
+    content.innerHTML = `
+        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+            <h3 style="margin-top: 0;">📍 ${data.destination}</h3>
+            <p><strong>Даты:</strong> ${data.dates}</p>
+            <p><strong>Чеков загружено:</strong> ${data.receipts_count} (с суммой: ${data.receipts_with_amount_count})</p>
+        </div>
+
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+            <thead>
+                <tr style="background: #e9ecef;">
+                    <th style="padding: 10px; text-align: left; border: 1px solid #dee2e6;">Категория</th>
+                    <th style="padding: 10px; text-align: right; border: 1px solid #dee2e6;">Сумма</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${expensesHtml || '<tr><td colspan="2" style="text-align: center; padding: 10px; color: #888;">Нет расходов</td></tr>'}
+                <tr style="background: #fff3cd;">
+                    <td style="padding: 10px; border: 1px solid #dee2e6;">
+                        <strong>Суточные</strong><br>
+                        <small>(${data.per_diem_days.toFixed(2)} дней - вычет ${data.per_diem_deduction.toFixed(2)} ₽)</small>
+                    </td>
+                    <td style="padding: 10px; text-align: right; border: 1px solid #dee2e6; font-weight: bold;">
+                        ${data.per_diem_to_pay.toFixed(2)} ₽
+                    </td>
+                </tr>
+            </tbody>
+            <tfoot>
+                <tr style="background: #d4edda; font-weight: bold; font-size: 16px;">
+                    <td style="padding: 15px; border: 1px solid #dee2e6;">ИТОГО расходы</td>
+                    <td style="padding: 15px; text-align: right; border: 1px solid #dee2e6;">${data.total_expenses.toFixed(2)} ₽</td>
+                </tr>
+                <tr>
+                    <td style="padding: 10px; border: 1px solid #dee2e6;">Аванс получен</td>
+                    <td style="padding: 10px; text-align: right; border: 1px solid #dee2e6;">${data.advance_rub.toFixed(2)} ₽</td>
+                </tr>
+            </tfoot>
+        </table>
+
+        <div class="${balanceClass}" style="text-align: center; font-size: 18px;">
+            ${balanceText}
+        </div>
+
+        <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin-top: 20px;">
+            <p style="margin: 0;"><strong>Будут созданы документы:</strong></p>
+            <ul style="margin: 10px 0 0 0; padding-left: 20px;">
+                <li>Авансовый отчёт (дата: ${data.ao_date})</li>
+                ${data.needs_sz_dopay ? '<li>Служебная записка на доплату</li>' : '<li style="color: #888;"><s>Служебная записка на доплату</s> (не требуется)</li>'}
+            </ul>
+        </div>
+    `;
+
+    // Предупреждения и ошибки
+    let warningsHtml = '';
+    if (data.errors && data.errors.length > 0) {
+        warningsHtml += `<div style="background: #f8d7da; border: 1px solid #f5c6cb; padding: 15px; border-radius: 5px; margin-bottom: 10px;">
+            <h4 style="color: #721c24; margin-top: 0;">❌ Ошибки:</h4>
+            <ul style="margin: 0; padding-left: 20px;">
+                ${data.errors.map(e => `<li style="color: #721c24;">${e}</li>`).join('')}
+            </ul>
+        </div>`;
+    }
+    if (data.warnings && data.warnings.length > 0) {
+        warningsHtml += `<div style="background: #fff3cd; border: 1px solid #ffeeba; padding: 15px; border-radius: 5px;">
+            <h4 style="color: #856404; margin-top: 0;">⚠️ Предупреждения:</h4>
+            <ul style="margin: 0; padding-left: 20px;">
+                ${data.warnings.map(w => `<li style="color: #856404;">${w}</li>`).join('')}
+            </ul>
+        </div>`;
+    }
+    warnings.innerHTML = warningsHtml;
+
+    // Активность кнопки
+    if (confirmBtn) {
+        confirmBtn.disabled = !data.can_generate;
+        confirmBtn.style.opacity = data.can_generate ? '1' : '0.5';
+    }
+
+    document.getElementById('previewPostTripModal').style.display = 'block';
+}
+
+function closePreviewPostTripModal() {
+    document.getElementById('previewPostTripModal').style.display = 'none';
+}
+
+async function confirmGeneratePostTrip() {
+    closePreviewPostTripModal();
+    await generatePostTrip();
+}
+
+/**
+ * Генерация документов ПОСЛЕ поездки
+ */
+async function generatePostTrip() {
+    if (!currentTripId) {
+        showNotification('Ошибка: не выбрана командировка', 'error');
+        return;
+    }
+
+    // Сохраняем дату АО перед генерацией
+    const aoDate = document.getElementById('aoDateInput')?.value;
+
+    if (aoDate) {
+        await fetch(`${API_URL}/trips/${currentTripId}`, {
+            method: 'PUT',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ ao_date: aoDate })
+        });
+    }
+
+    try {
+        showNotification('Создание Авансового отчёта...', 'info');
+
+        const response = await fetch(`${API_URL}/trips/${currentTripId}/generate-post-trip`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+
+        if (response.ok) {
+            const result = await response.json();
+
+            let message = 'Авансовый отчёт создан!';
+            if (result.needs_sz_dopay) {
+                message += ' СЗ на доплату также создана.';
+            }
+            showNotification(message, 'success');
+
+            const statusDiv = document.getElementById('postDocsStatus');
+            if (statusDiv) {
+                const balanceInfo = result.to_return > 0
+                    ? `<p style="color: #c62828;">К возврату в кассу: ${result.to_return.toFixed(2)} ₽</p>`
+                    : (result.to_return < 0
+                        ? `<p style="color: #1565c0;">К получению (доплата): ${Math.abs(result.to_return).toFixed(2)} ₽</p>`
+                        : '<p style="color: #2e7d32;">Баланс: 0 ₽</p>');
+
+                statusDiv.innerHTML = `
+                    <div style="background: #d4edda; padding: 15px; border-radius: 8px; margin-top: 15px;">
+                        <h4 style="color: #155724; margin: 0 0 10px 0;">✓ Документы готовы</h4>
+                        <ul style="margin: 0; padding-left: 20px; color: #155724;">
+                            ${result.documents.map(d => `<li>${d}</li>`).join('')}
+                        </ul>
+                        ${balanceInfo}
+                    </div>
+                `;
+            }
+
+            document.getElementById('downloadPostBtn').style.display = 'inline-block';
+            document.getElementById('tabPostTrip').classList.add('completed');
+        } else {
+            const error = await response.json();
+            showNotification(error.detail || 'Ошибка генерации', 'error');
+        }
+    } catch (error) {
+        console.error('Generate post-trip error:', error);
+        showNotification('Ошибка соединения', 'error');
+    }
 }

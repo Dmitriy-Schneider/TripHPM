@@ -1,10 +1,14 @@
 """
 Упрощенный генератор документов - работает только с готовыми шаблонами
 Простая логика: копирование шаблона + заполнение ячеек + архивирование
+
+РАЗДЕЛЕНИЕ НА ДВА ЭТАПА:
+1. ДО поездки: Приказ + СЗ (запрос аванса)
+2. ПОСЛЕ поездки: АО + СЗ (только при перерасходе)
 """
 from pathlib import Path
 from datetime import date, datetime, timedelta
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Optional
 from decimal import Decimal, ROUND_CEILING
 import re
 import zipfile
@@ -17,27 +21,218 @@ import logging
 
 
 class SimpleDocumentGenerator:
-    """Упрощенный генератор документов"""
+    """Упрощенный генератор документов с разделением на этапы"""
 
     def __init__(self, templates_dir: Path, output_dir: Path):
         self.templates_dir = Path(templates_dir)
         self.output_dir = Path(output_dir)
 
-    def generate_all(self, trip_data: Dict) -> Dict[str, str]:
-        """Генерирует все документы - простая логика"""
-
-        # Создаем папку для командировки
+    def _get_trip_folder(self, trip_data: Dict) -> Path:
+        """Возвращает путь к папке командировки"""
         folder_name = f"{trip_data['date_from'].strftime('%Y-%m-%d')}_{trip_data['destination_city']}_{trip_data['fio'].split()[0]}"
-        trip_folder = self.output_dir / folder_name
+        return self.output_dir / folder_name
+
+    def _ensure_folder_structure(self, trip_folder: Path) -> None:
+        """Создает структуру папок если нужно"""
+        trip_folder.mkdir(parents=True, exist_ok=True)
+        (trip_folder / "documents").mkdir(exist_ok=True)
+        (trip_folder / "receipts").mkdir(exist_ok=True)
+
+    # ==================== ЭТАП 1: ДО ПОЕЗДКИ ====================
+
+    def generate_pre_trip(self, trip_data: Dict) -> Dict[str, str]:
+        """
+        Генерирует документы ДО поездки:
+        - Приказ
+        - Служебная записка (запрос аванса)
+
+        Дата документов = prikaz_date или sz_date из trip_data, или сегодня
+        Сумма в СЗ = advance_rub (запрашиваемый аванс)
+        """
+        trip_folder = self._get_trip_folder(trip_data)
+        self._ensure_folder_structure(trip_folder)
+
+        results = {}
+
+        # 1. Приказ (дата = prikaz_date или сегодня)
+        results['prikaz'] = self._generate_prikaz(trip_data, trip_folder)
+
+        # 2. Служебная записка на аванс
+        results['sz_advance'] = self._generate_sz_advance(trip_data, trip_folder)
+
+        # 3. Создаем ZIP
+        results['zip'] = self._create_zip(trip_folder)
+
+        return results
+
+    def _generate_sz_advance(self, trip_data: Dict, output_folder: Path) -> str:
+        """
+        Генерирует Служебную записку на запрос аванса ДО поездки.
+        Сумма = advance_rub (только аванс, без чеков).
+        Дата = sz_date или сегодня.
+        """
+        template_path = self.templates_dir / "sz_template.docx"
+        output_path = output_folder / "documents" / "Служебная_записка_аванс.docx"
+
+        logger = logging.getLogger(__name__)
+        doc = Document(template_path)
+
+        org_name = trip_data.get('org_name', 'ООО «ВЭМ»')
+        fio = trip_data['fio']
+        fio_short = self._fio_short(fio)
+
+        # Дата = sz_date или сегодня
+        doc_date = trip_data.get('sz_date') or date.today()
+        if isinstance(doc_date, datetime):
+            doc_date = doc_date.date()
+
+        # Сумма = только аванс
+        advance_amount = trip_data.get('advance_rub', 0) or 0
+        advance_rounded = self._ceil_rubles(advance_amount)
+        advance_words = num2words(advance_rounded, lang='ru')
+
+        logger.info(
+            "[SZ_ADVANCE] advance=%s rounded=%s words='%s' doc_date=%s",
+            advance_amount, advance_rounded, advance_words, doc_date.strftime('%d.%m.%Y')
+        )
+
+        sum_pattern = re.compile(r'сумму\s+\d+[\d\s]*\s*\([^)]*\)\s+рублей', re.IGNORECASE)
+        date_pattern = re.compile(r'\d{2}\.\d{2}\.\d{4}')
+
+        for paragraph in doc.paragraphs:
+            raw_text = paragraph.text
+            text = raw_text.strip()
+
+            if text == "ООО «ВЭМ»":
+                paragraph.text = org_name
+                continue
+
+            if text.startswith("от "):
+                paragraph.text = f"от {fio_short}"
+                continue
+
+            updated = sum_pattern.sub(
+                f"сумму {advance_rounded} ({advance_words}) рублей",
+                raw_text
+            )
+            updated = date_pattern.sub(doc_date.strftime('%d.%m.%Y'), updated)
+
+            if updated != raw_text:
+                paragraph.text = updated
+
+        doc.save(output_path)
+        return str(output_path)
+
+    # ==================== ЭТАП 2: ПОСЛЕ ПОЕЗДКИ ====================
+
+    def generate_post_trip(self, trip_data: Dict) -> Dict[str, str]:
+        """
+        Генерирует документы ПОСЛЕ поездки:
+        - Авансовый отчет
+        - Служебная записка на доплату (ТОЛЬКО если перерасход > 0)
+
+        Возвращает словарь с путями к файлам и флагом needs_sz_dopay
+        """
+        trip_folder = self._get_trip_folder(trip_data)
+        self._ensure_folder_structure(trip_folder)
+
+        results = {}
+
+        # 1. Авансовый отчет
+        results['ao'] = self._generate_ao(trip_data, trip_folder)
+
+        # 2. Проверяем: нужна ли СЗ на доплату?
+        # to_return > 0 = остаток к возврату (не нужна СЗ)
+        # to_return < 0 = перерасход, нужна доплата (нужна СЗ)
+        to_return = trip_data.get('to_return', 0)
+        results['to_return'] = to_return
+        results['needs_sz_dopay'] = to_return < 0
+
+        if to_return < 0:
+            # Перерасход - генерируем СЗ на доплату
+            results['sz_dopay'] = self._generate_sz_dopay(trip_data, trip_folder, abs(to_return))
+        else:
+            results['sz_dopay'] = None
+
+        # 3. Копируем чеки
+        self._copy_receipts(trip_data, trip_folder)
+
+        # 4. Создаем ZIP
+        results['zip'] = self._create_zip(trip_folder)
+
+        return results
+
+    def _generate_sz_dopay(self, trip_data: Dict, output_folder: Path, dopay_amount: float) -> str:
+        """
+        Генерирует Служебную записку на доплату ПОСЛЕ поездки.
+        Создается только если перерасход > 0.
+        Сумма = сумма доплаты (перерасход).
+        Дата = ao_date или сегодня.
+        """
+        template_path = self.templates_dir / "sz_template.docx"
+        output_path = output_folder / "documents" / "Служебная_записка_доплата.docx"
+
+        logger = logging.getLogger(__name__)
+        doc = Document(template_path)
+
+        org_name = trip_data.get('org_name', 'ООО «ВЭМ»')
+        fio = trip_data['fio']
+        fio_short = self._fio_short(fio)
+
+        # Дата = ao_date или сегодня
+        doc_date = trip_data.get('ao_date') or date.today()
+        if isinstance(doc_date, datetime):
+            doc_date = doc_date.date()
+
+        dopay_rounded = self._ceil_rubles(dopay_amount)
+        dopay_words = num2words(dopay_rounded, lang='ru')
+
+        logger.info(
+            "[SZ_DOPAY] dopay=%s rounded=%s words='%s' doc_date=%s",
+            dopay_amount, dopay_rounded, dopay_words, doc_date.strftime('%d.%m.%Y')
+        )
+
+        sum_pattern = re.compile(r'сумму\s+\d+[\d\s]*\s*\([^)]*\)\s+рублей', re.IGNORECASE)
+        date_pattern = re.compile(r'\d{2}\.\d{2}\.\d{4}')
+
+        for paragraph in doc.paragraphs:
+            raw_text = paragraph.text
+            text = raw_text.strip()
+
+            if text == "ООО «ВЭМ»":
+                paragraph.text = org_name
+                continue
+
+            if text.startswith("от "):
+                paragraph.text = f"от {fio_short}"
+                continue
+
+            updated = sum_pattern.sub(
+                f"сумму {dopay_rounded} ({dopay_words}) рублей",
+                raw_text
+            )
+            updated = date_pattern.sub(doc_date.strftime('%d.%m.%Y'), updated)
+
+            if updated != raw_text:
+                paragraph.text = updated
+
+        doc.save(output_path)
+        return str(output_path)
+
+    # ==================== СТАРЫЙ МЕТОД (для обратной совместимости) ====================
+
+    def generate_all(self, trip_data: Dict) -> Dict[str, str]:
+        """
+        Генерирует все документы - для обратной совместимости.
+        Рекомендуется использовать generate_pre_trip и generate_post_trip.
+        """
+        trip_folder = self._get_trip_folder(trip_data)
 
         # Удаляем старую папку если есть
         if trip_folder.exists():
             shutil.rmtree(trip_folder)
 
-        # Создаем структуру папок
-        trip_folder.mkdir(parents=True)
-        (trip_folder / "documents").mkdir()
-        (trip_folder / "receipts").mkdir()
+        self._ensure_folder_structure(trip_folder)
 
         results = {}
 
@@ -47,7 +242,7 @@ class SimpleDocumentGenerator:
         # 2. Авансовый отчет
         results['ao'] = self._generate_ao(trip_data, trip_folder)
 
-        # 3. Служебная записка
+        # 3. Служебная записка (старый вариант с total_expenses)
         results['sz'] = self._generate_sz(trip_data, trip_folder)
 
         # 4. Копируем чеки
@@ -75,7 +270,11 @@ class SimpleDocumentGenerator:
         days = str(trip_data['days'])
         date_from = trip_data['date_from']
         date_to = trip_data['date_to']
-        order_date = self._calculate_doc_date(date_from)
+
+        # Дата приказа = prikaz_date или сегодня (НЕ за 2 дня до поездки)
+        order_date = trip_data.get('prikaz_date') or date.today()
+        if isinstance(order_date, datetime):
+            order_date = order_date.date()
 
         tables = doc.tables
         if len(tables) >= 8:

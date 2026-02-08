@@ -7,6 +7,15 @@ from sqlalchemy.sql import func
 from ..database import Base
 
 
+# Статусы командировки
+class TripStatus:
+    PLANNED = "planned"      # Создана, можно генерить приказ/СЗ до поездки
+    ACTIVE = "active"        # Поездка началась
+    RETURNED = "returned"    # Вернулись, загружаем чеки
+    REPORTED = "reported"    # Авансовый отчёт готов
+    SUBMITTED = "submitted"  # Сдано в бухгалтерию
+
+
 class Trip(Base):
     """Модель командировки"""
 
@@ -36,8 +45,17 @@ class Trip(Base):
     # Финансы
     advance_rub = Column(Float, default=0.0)
 
-    # Статус
-    status = Column(String, default="draft")  # draft | completed | archived
+    # Статус командировки
+    status = Column(String, default=TripStatus.PLANNED)
+
+    # Даты документов (редактируемые, по умолчанию = сегодня)
+    prikaz_date = Column(Date, nullable=True)  # Дата приказа
+    sz_date = Column(Date, nullable=True)      # Дата служебной записки
+    ao_date = Column(Date, nullable=True)      # Дата авансового отчёта
+
+    # Флаги генерации документов
+    pre_trip_docs_generated = Column(Boolean, default=False)   # Приказ + СЗ до поездки
+    post_trip_docs_generated = Column(Boolean, default=False)  # АО + СЗ после поездки
 
     # Временные метки
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -48,4 +66,4 @@ class Trip(Base):
     receipts = relationship("Receipt", back_populates="trip", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<Trip(id={self.id}, destination='{self.destination_city}', date={self.date_from})>"
+        return f"<Trip(id={self.id}, destination='{self.destination_city}', date={self.date_from}, status='{self.status}')>"

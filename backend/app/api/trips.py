@@ -1,5 +1,9 @@
 """
 API endpoints для управления командировками
+
+Разделение на два этапа:
+1. ДО поездки: Приказ + СЗ (запрос аванса)
+2. ПОСЛЕ поездки: АО + СЗ (только при перерасходе)
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,7 +16,7 @@ from pathlib import Path
 import logging
 from ..database import get_db
 from ..models.user import User
-from ..models.trip import Trip
+from ..models.trip import Trip, TripStatus
 from ..models.receipt import Receipt
 from ..utils.auth import get_current_active_user
 from ..services.document_generator_simple import SimpleDocumentGenerator, calculate_per_diem_days
@@ -94,6 +98,10 @@ class TripCreate(BaseModel):
     meals_lunch_count: int = 0
     meals_dinner_count: int = 0
     advance_rub: float = 0.0
+    # Даты документов (по умолчанию = сегодня при генерации)
+    prikaz_date: Optional[date] = None
+    sz_date: Optional[date] = None
+    ao_date: Optional[date] = None
 
 
 class TripUpdate(BaseModel):
@@ -109,11 +117,17 @@ class TripUpdate(BaseModel):
     meals_dinner_count: Optional[int] = None
     advance_rub: Optional[float] = None
     status: Optional[str] = None
+    # Даты документов
+    prikaz_date: Optional[date] = None
+    sz_date: Optional[date] = None
+    ao_date: Optional[date] = None
 
 
 class ReceiptInfo(BaseModel):
     id: int
     category: str
+    document_type: Optional[str] = "fiscal"
+    requires_amount: bool = True
     amount: Optional[float]
     receipt_date: Optional[datetime]
     org_name: Optional[str]
@@ -138,6 +152,13 @@ class TripResponse(BaseModel):
     meals_dinner_count: int
     advance_rub: float
     status: str
+    # Даты документов
+    prikaz_date: Optional[date]
+    sz_date: Optional[date]
+    ao_date: Optional[date]
+    # Флаги генерации
+    pre_trip_docs_generated: bool = False
+    post_trip_docs_generated: bool = False
     created_at: datetime
     receipts: List[ReceiptInfo] = []
 
@@ -526,6 +547,335 @@ async def generate_documents(
             detail=f"Error generating documents: {str(e)}"
         )
 
+
+# ==================== ЭТАП 1: ДО ПОЕЗДКИ ====================
+
+@router.get("/{trip_id}/preview-pre-trip")
+async def preview_pre_trip(
+    trip_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Предпросмотр данных ДО поездки (для Приказа и СЗ на аванс)"""
+
+    trip = db.query(Trip).filter(
+        Trip.id == trip_id,
+        Trip.user_id == current_user.id
+    ).first()
+
+    if not trip:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found")
+
+    days = (trip.date_to - trip.date_from).days + 1
+
+    # Рассчитываем суточные
+    per_diem_days = calculate_per_diem_days(
+        trip.date_from, trip.date_to, trip.departure_time, trip.arrival_time
+    )
+    per_diem_total = per_diem_days * current_user.per_diem_rate
+
+    # Предполагаемые расходы = аванс
+    advance = trip.advance_rub or 0
+
+    warnings = []
+    if advance == 0:
+        warnings.append("Сумма аванса не указана")
+    if not trip.departure_time or not trip.arrival_time:
+        warnings.append("Время выезда/приезда не указано")
+
+    return {
+        "trip_id": trip_id,
+        "destination": trip.destination_city,
+        "destination_org": trip.destination_org,
+        "dates": f"{trip.date_from.strftime('%d.%m.%Y')} - {trip.date_to.strftime('%d.%m.%Y')}",
+        "days": days,
+        "purpose": trip.purpose,
+        "advance_rub": advance,
+        "per_diem_days": per_diem_days,
+        "per_diem_total": per_diem_total,
+        "prikaz_date": (trip.prikaz_date or date.today()).strftime('%d.%m.%Y'),
+        "sz_date": (trip.sz_date or date.today()).strftime('%d.%m.%Y'),
+        "pre_trip_docs_generated": trip.pre_trip_docs_generated,
+        "warnings": warnings,
+        "can_generate": True  # Всегда можно генерировать ДО поездки
+    }
+
+
+@router.post("/{trip_id}/generate-pre-trip")
+async def generate_pre_trip_documents(
+    trip_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Генерирует документы ДО поездки:
+    - Приказ (дата = prikaz_date или сегодня)
+    - Служебная записка на аванс (сумма = advance_rub)
+    """
+    logger.info(f"[PRE-TRIP] Starting generation for trip_id={trip_id}")
+
+    trip = db.query(Trip).filter(
+        Trip.id == trip_id,
+        Trip.user_id == current_user.id
+    ).first()
+
+    if not trip:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found")
+
+    try:
+        trip_data = {
+            'fio': current_user.fio,
+            'tab_no': current_user.tab_no,
+            'department': current_user.department,
+            'position': current_user.position,
+            'org_name': current_user.org_name,
+            'destination_city': trip.destination_city,
+            'destination_org': trip.destination_org,
+            'date_from': trip.date_from,
+            'date_to': trip.date_to,
+            'departure_time': trip.departure_time,
+            'arrival_time': trip.arrival_time,
+            'purpose': trip.purpose,
+            'days': (trip.date_to - trip.date_from).days + 1,
+            'advance_rub': trip.advance_rub or 0,
+            'prikaz_date': trip.prikaz_date or date.today(),
+            'sz_date': trip.sz_date or date.today(),
+        }
+
+        generator = SimpleDocumentGenerator(settings.TEMPLATES_DIR, settings.OUTPUT_DIR)
+        result = generator.generate_pre_trip(trip_data)
+
+        # Обновляем флаг в БД
+        trip.pre_trip_docs_generated = True
+        if trip.status == TripStatus.PLANNED:
+            trip.status = TripStatus.PLANNED  # Остаётся planned
+        db.commit()
+
+        logger.info(f"[PRE-TRIP] Generation successful: {result}")
+        return {
+            "message": "Документы ДО поездки успешно созданы",
+            "files": result,
+            "documents": ["Приказ", "Служебная записка (аванс)"]
+        }
+
+    except Exception as e:
+        logger.error(f"[PRE-TRIP] Generation failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка генерации: {str(e)}"
+        )
+
+
+# ==================== ЭТАП 2: ПОСЛЕ ПОЕЗДКИ ====================
+
+@router.get("/{trip_id}/preview-post-trip")
+async def preview_post_trip(
+    trip_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Предпросмотр данных ПОСЛЕ поездки (для АО и СЗ на доплату).
+    Показывает: сумма чеков, суточные, итого, к возврату/доплате.
+    """
+    trip = db.query(Trip).filter(
+        Trip.id == trip_id,
+        Trip.user_id == current_user.id
+    ).first()
+
+    if not trip:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found")
+
+    # Lazy-обработка чеков
+    _fill_missing_receipt_data(trip.receipts, db)
+
+    # Расходы по категориям (только документы с суммой)
+    expenses_by_category = {}
+    for receipt in trip.receipts:
+        if receipt.requires_amount and receipt.amount:
+            category = SimpleDocumentGenerator._normalize_category_key(receipt.category)
+            expenses_by_category[category] = expenses_by_category.get(category, 0) + receipt.amount
+
+    # Суточные
+    days = (trip.date_to - trip.date_from).days + 1
+    per_diem_days = calculate_per_diem_days(
+        trip.date_from, trip.date_to, trip.departure_time, trip.arrival_time
+    )
+    per_diem_total = per_diem_days * current_user.per_diem_rate
+    per_diem_deduction = (
+        trip.meals_breakfast_count * 0.15 +
+        trip.meals_lunch_count * 0.30 +
+        trip.meals_dinner_count * 0.30
+    ) * per_diem_total / days if days > 0 else 0
+    per_diem_to_pay = per_diem_total - per_diem_deduction
+
+    # Итоги
+    total_receipts = sum(expenses_by_category.values())
+    total_expenses = total_receipts + per_diem_to_pay
+    advance = trip.advance_rub or 0
+    to_return = advance - total_expenses  # >0 = вернуть, <0 = доплатить
+
+    warnings = []
+    errors = []
+
+    receipts_with_amount = [r for r in trip.receipts if r.requires_amount]
+    if not receipts_with_amount:
+        errors.append("Нет чеков с суммами")
+    elif total_receipts == 0:
+        warnings.append("У всех чеков нулевая сумма")
+
+    if not trip.departure_time or not trip.arrival_time:
+        warnings.append("Время выезда/приезда не указано - суточные рассчитаны примерно")
+
+    # СЗ на доплату нужна только если to_return < 0
+    needs_sz_dopay = to_return < 0
+
+    return {
+        "trip_id": trip_id,
+        "destination": trip.destination_city,
+        "dates": f"{trip.date_from.strftime('%d.%m.%Y')} - {trip.date_to.strftime('%d.%m.%Y')}",
+        "receipts_count": len(trip.receipts),
+        "receipts_with_amount_count": len(receipts_with_amount),
+        "expenses_by_category": expenses_by_category,
+        "per_diem_days": per_diem_days,
+        "per_diem_total": per_diem_total,
+        "per_diem_deduction": per_diem_deduction,
+        "per_diem_to_pay": per_diem_to_pay,
+        "total_receipts_amount": total_receipts,
+        "total_expenses": total_expenses,
+        "advance_rub": advance,
+        "to_return": to_return,
+        "needs_sz_dopay": needs_sz_dopay,
+        "balance_status": "К возврату" if to_return > 0 else ("К доплате" if to_return < 0 else "В ноль"),
+        "ao_date": (trip.ao_date or date.today()).strftime('%d.%m.%Y'),
+        "post_trip_docs_generated": trip.post_trip_docs_generated,
+        "warnings": warnings,
+        "errors": errors,
+        "can_generate": len(errors) == 0
+    }
+
+
+@router.post("/{trip_id}/generate-post-trip")
+async def generate_post_trip_documents(
+    trip_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Генерирует документы ПОСЛЕ поездки:
+    - Авансовый отчёт
+    - Служебная записка на доплату (ТОЛЬКО если перерасход > 0)
+    """
+    logger.info(f"[POST-TRIP] Starting generation for trip_id={trip_id}")
+
+    trip = db.query(Trip).filter(
+        Trip.id == trip_id,
+        Trip.user_id == current_user.id
+    ).first()
+
+    if not trip:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found")
+
+    # Lazy-обработка чеков
+    _fill_missing_receipt_data(trip.receipts, db)
+
+    # Проверка: есть ли чеки с суммами
+    receipts_with_amount = [r for r in trip.receipts if r.requires_amount and r.amount]
+    if not receipts_with_amount:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нет чеков с суммами. Загрузите чеки или укажите суммы вручную."
+        )
+
+    try:
+        # Расходы по категориям
+        expenses_by_category = {}
+        for receipt in trip.receipts:
+            if receipt.requires_amount and receipt.amount:
+                category = SimpleDocumentGenerator._normalize_category_key(receipt.category)
+                expenses_by_category[category] = expenses_by_category.get(category, 0) + receipt.amount
+
+        # Суточные
+        days = (trip.date_to - trip.date_from).days + 1
+        per_diem_days = calculate_per_diem_days(
+            trip.date_from, trip.date_to, trip.departure_time, trip.arrival_time
+        )
+        per_diem_total = per_diem_days * current_user.per_diem_rate
+        per_diem_deduction = (
+            trip.meals_breakfast_count * 0.15 +
+            trip.meals_lunch_count * 0.30 +
+            trip.meals_dinner_count * 0.30
+        ) * per_diem_total / days if days > 0 else 0
+        per_diem_to_pay = per_diem_total - per_diem_deduction
+
+        total_expenses = sum(expenses_by_category.values()) + per_diem_to_pay
+        to_return = (trip.advance_rub or 0) - total_expenses
+
+        trip_data = {
+            'fio': current_user.fio,
+            'tab_no': current_user.tab_no,
+            'department': current_user.department,
+            'position': current_user.position,
+            'org_name': current_user.org_name,
+            'destination_city': trip.destination_city,
+            'destination_org': trip.destination_org,
+            'date_from': trip.date_from,
+            'date_to': trip.date_to,
+            'purpose': trip.purpose,
+            'days': days,
+            'advance_rub': trip.advance_rub or 0,
+            'ao_date': trip.ao_date or date.today(),
+            'expenses_by_category': expenses_by_category,
+            'per_diem_days': per_diem_days,
+            'per_diem_total': per_diem_total,
+            'per_diem_deduction': per_diem_deduction,
+            'per_diem_to_pay': per_diem_to_pay,
+            'total_expenses': total_expenses,
+            'to_return': to_return,
+            'receipts': [
+                {
+                    'category': r.category,
+                    'amount': r.amount,
+                    'date': r.receipt_date,
+                    'org_name': r.org_name,
+                    'file_path': str(settings.BASE_DIR / r.file_path) if not Path(r.file_path).is_absolute() else r.file_path
+                }
+                for r in trip.receipts
+            ]
+        }
+
+        generator = SimpleDocumentGenerator(settings.TEMPLATES_DIR, settings.OUTPUT_DIR)
+        result = generator.generate_post_trip(trip_data)
+
+        # Обновляем флаг в БД
+        trip.post_trip_docs_generated = True
+        trip.status = TripStatus.REPORTED
+        db.commit()
+
+        documents = ["Авансовый отчёт"]
+        if result.get('needs_sz_dopay'):
+            documents.append("Служебная записка (доплата)")
+
+        logger.info(f"[POST-TRIP] Generation successful: {result}")
+        return {
+            "message": "Документы ПОСЛЕ поездки успешно созданы",
+            "files": result,
+            "documents": documents,
+            "to_return": to_return,
+            "needs_sz_dopay": result.get('needs_sz_dopay', False)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[POST-TRIP] Generation failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка генерации: {str(e)}"
+        )
+
+
+# ==================== СКАЧИВАНИЕ ====================
 
 @router.get("/{trip_id}/download")
 async def download_trip_package(

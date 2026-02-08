@@ -1,5 +1,9 @@
 """
-API endpoints для управления чеками
+API endpoints для управления чеками и документами
+
+Поддерживает два типа документов:
+- С суммой (fiscal, ticket, hotel, other) - требуют сумму
+- Без суммы (boarding, confirmation) - подтверждающие документы
 """
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
@@ -14,12 +18,10 @@ import hashlib
 from ..database import get_db
 from ..models.user import User
 from ..models.trip import Trip
-from ..models.receipt import Receipt
+from ..models.receipt import Receipt, DocumentType
 from ..utils.auth import get_current_active_user
 from ..services.qr_reader import QRReader
 from ..config import settings
-
-# Удалена функция транслитерации - работаем с именами файлов как есть
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -42,9 +44,11 @@ def _sha256_file(path: Path) -> str:
 
 class ReceiptUpdate(BaseModel):
     category: Optional[str] = None
+    document_type: Optional[str] = None  # fiscal, boarding, confirmation, etc.
     amount: Optional[float] = None
     receipt_date: Optional[datetime] = None
     org_name: Optional[str] = None
+    requires_amount: Optional[bool] = None
 
 
 @router.post("/trip/{trip_id}/upload")
@@ -52,12 +56,17 @@ async def upload_receipt(
     trip_id: int,
     file: UploadFile = File(...),
     category: str = Form("other"),
+    document_type: str = Form("fiscal"),  # fiscal = с суммой, boarding = без суммы
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
-    Загрузить чек для командировки
-    Автоматически читает QR код и извлекает данные
+    Загрузить чек/документ для командировки.
+
+    document_type:
+    - fiscal: чек с суммой (QR распознавание)
+    - boarding: посадочный талон (без суммы)
+    - confirmation: подтверждающий документ (без суммы)
     """
 
     # Проверяем существование командировки
@@ -184,12 +193,17 @@ async def upload_receipt(
     # Получаем относительный путь для БД
     relative_path = file_path.relative_to(settings.BASE_DIR)
 
+    # Определяем, требуется ли сумма для этого типа документа
+    requires_amount = document_type not in DocumentType.NO_AMOUNT_TYPES
+
     # Создаем запись в БД
     receipt = Receipt(
         trip_id=trip_id,
         file_path=str(relative_path).replace('\\', '/'),  # Используем прямые слеши
         file_name=file.filename,
         category=category,
+        document_type=document_type,
+        requires_amount=requires_amount,
         has_qr=qr_string is not None
     )
 
@@ -212,6 +226,8 @@ async def upload_receipt(
         "id": receipt.id,
         "file_name": receipt.file_name,
         "category": receipt.category,
+        "document_type": receipt.document_type,
+        "requires_amount": receipt.requires_amount,
         "amount": receipt.amount,
         "receipt_date": receipt.receipt_date,
         "has_qr": receipt.has_qr,
@@ -296,10 +312,17 @@ async def delete_receipt(
             detail="Receipt not found"
         )
 
-    # Удаляем файл
+    # Удаляем файл (преобразуем относительный путь в абсолютный)
     file_path = Path(receipt.file_path)
+    if not file_path.is_absolute():
+        file_path = settings.BASE_DIR / file_path
+
     if file_path.exists():
-        file_path.unlink()
+        try:
+            file_path.unlink()
+            logger.info("[DELETE] Deleted file: %s", file_path)
+        except Exception as e:
+            logger.warning("[DELETE] Failed to delete file %s: %s", file_path, e)
 
     # Удаляем запись из БД
     db.delete(receipt)

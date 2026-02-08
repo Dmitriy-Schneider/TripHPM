@@ -636,3 +636,188 @@ body {
         transform: translateY(-10px);
     }
 }
+
+/* ==================== ЭТАПЫ КОМАНДИРОВКИ ==================== */
+
+.stage-tabs {
+    display: flex;
+    gap: 0;
+    margin: 20px 0;
+    border-bottom: 2px solid #e0e0e0;
+}
+
+.stage-tab {
+    flex: 1;
+    padding: 15px 20px;
+    background: #f5f5f5;
+    border: none;
+    border-bottom: 3px solid transparent;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: #666;
+    transition: all 0.3s;
+}
+
+.stage-tab:first-child {
+    border-radius: 8px 0 0 0;
+}
+
+.stage-tab:last-child {
+    border-radius: 0 8px 0 0;
+}
+
+.stage-tab:hover {
+    background: #e8e8e8;
+}
+
+.stage-tab.active {
+    background: white;
+    color: #42A5F5;
+    border-bottom-color: #42A5F5;
+}
+
+.stage-tab.completed {
+    background: #E8F5E9;
+    color: #4CAF50;
+}
+
+.stage-tab.completed::after {
+    content: " ✓";
+}
+
+.stage-content {
+    display: none;
+    padding: 20px;
+    background: white;
+    border-radius: 0 0 8px 8px;
+    border: 1px solid #e0e0e0;
+    border-top: none;
+}
+
+.stage-content.active {
+    display: block;
+}
+
+.stage-header {
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #eee;
+}
+
+.stage-header h3 {
+    margin: 0 0 5px 0;
+    color: #333;
+}
+
+.stage-description {
+    margin: 0;
+    color: #888;
+    font-size: 14px;
+}
+
+.stage-info {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.info-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 8px 0;
+}
+
+.info-row:not(:last-child) {
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.info-label {
+    font-weight: 600;
+    color: #555;
+    min-width: 150px;
+}
+
+.info-value {
+    color: #333;
+    font-weight: 500;
+}
+
+.date-input-small {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.date-input-small:focus {
+    outline: none;
+    border-color: #42A5F5;
+}
+
+/* Статусы в карточках */
+.trip-stage-badges {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.stage-badge {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.stage-badge.pending {
+    background: #FFF3E0;
+    color: #E65100;
+}
+
+.stage-badge.ready {
+    background: #E8F5E9;
+    color: #2E7D32;
+}
+
+/* Баланс */
+.balance-positive {
+    background: #ffebee;
+    color: #c62828;
+    padding: 10px 15px;
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+.balance-negative {
+    background: #e3f2fd;
+    color: #1565c0;
+    padding: 10px 15px;
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+.balance-zero {
+    background: #e8f5e9;
+    color: #2e7d32;
+    padding: 10px 15px;
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+/* Секция чеков в этапе 2 */
+.receipts-section h4 {
+    margin: 0 0 15px 0;
+    color: #42A5F5;
+}
+
+.documents-section h4 {
+    margin: 20px 0 15px 0;
+    color: #42A5F5;
+}
+
+/* Тип документа */
+#documentType {
+    margin-left: 10px;
+}

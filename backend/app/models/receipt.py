@@ -1,10 +1,23 @@
 """
-Модель чека
+Модель чека/документа
 """
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from ..database import Base
+
+
+# Типы документов
+class DocumentType:
+    FISCAL_RECEIPT = "fiscal"      # QR-чек с суммой (требует сумму)
+    TRANSPORT_TICKET = "ticket"    # Билет с суммой (требует сумму)
+    BOARDING_PASS = "boarding"     # Посадочный талон (БЕЗ суммы)
+    HOTEL_INVOICE = "hotel"        # Счёт гостиницы (требует сумму)
+    CONFIRMATION = "confirmation"  # Подтверждающий документ (БЕЗ суммы)
+    OTHER = "other"                # Прочее (требует сумму)
+
+    # Типы, которые НЕ требуют сумму
+    NO_AMOUNT_TYPES = [BOARDING_PASS, CONFIRMATION]
 
 
 class Receipt(Base):
@@ -19,8 +32,11 @@ class Receipt(Base):
     file_path = Column(String, nullable=False)
     file_name = Column(String, nullable=False)
 
-    # Категория (строка, допускаются пользовательские значения)
-    category = Column(String, nullable=False)  # taxi | fuel | airplane | hotel | restaurant | other | custom text
+    # Тип документа (определяет, нужна ли сумма)
+    document_type = Column(String, default=DocumentType.FISCAL_RECEIPT)
+
+    # Категория расхода (строка, допускаются пользовательские значения)
+    category = Column(String, nullable=False)  # taxi | fuel | airplane | hotel | other | custom text
 
     # Данные чека
     amount = Column(Float, nullable=True)
@@ -36,6 +52,7 @@ class Receipt(Base):
     # Флаги
     has_qr = Column(Boolean, default=False)
     is_manual = Column(Boolean, default=False)  # Данные введены вручную
+    requires_amount = Column(Boolean, default=True)  # Требуется ли сумма для этого документа
 
     # Временные метки
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -45,4 +62,4 @@ class Receipt(Base):
     trip = relationship("Trip", back_populates="receipts")
 
     def __repr__(self):
-        return f"<Receipt(id={self.id}, category='{self.category}', amount={self.amount})>"
+        return f"<Receipt(id={self.id}, type='{self.document_type}', category='{self.category}', amount={self.amount})>"
