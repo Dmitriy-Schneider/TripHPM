@@ -1,0 +1,49 @@
+# FastAPI и сервер
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# База данных
+sqlalchemy==2.0.25
+alembic==1.13.1
+
+# Аутентификация
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt<4
+python-dotenv==1.0.0
+
+# Обработка документов
+python-docx==1.1.0
+docxtpl==0.16.7
+openpyxl==3.1.2
+xlrd==2.0.1
+pywin32==306
+
+# QR коды
+pyzbar==0.1.9
+opencv-python==4.9.0.80
+numpy<2
+Pillow==10.2.0
+
+# PDF обработка
+PyMuPDF==1.23.21
+
+# Работа с датами
+python-dateutil==2.8.2
+
+# Числа прописью (для "суммы прописью")
+num2words==0.5.13
+
+# HTTP клиент
+httpx==0.26.0
+
+# Валидация
+pydantic==2.5.3
+pydantic-settings==2.1.0
+email-validator==2.3.0
+
+# OCR для распознавания текста с чеков
+easyocr==1.7.0
+torch==2.1.2
+torchvision==0.16.2
