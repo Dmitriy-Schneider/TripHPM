@@ -289,8 +289,22 @@ async def delete_trip(
     else:
         logger.debug(f"[DELETE] Receipts directory not found: {receipts_dir}")
 
-    # Удаляем папку с документами
-    folder_name = f"{trip.date_from.strftime('%Y-%m-%d')}_{trip.destination_city}_{current_user.fio.split()[0]}"
+    # Удаляем папку с документами (проверяем обе директории)
+    folder_name = f"{trip.date_from.strftime('%Y-%m-%d')}_{trip.destination_city}"
+
+    # Проверяем CUSTOM_OUTPUT_DIR
+    if settings.CUSTOM_OUTPUT_DIR:
+        custom_output_dir = Path(settings.CUSTOM_OUTPUT_DIR) / folder_name
+        if custom_output_dir.exists():
+            logger.info(f"[DELETE] Removing custom output directory: {custom_output_dir}")
+            shutil.rmtree(custom_output_dir)
+
+        custom_zip_path = Path(settings.CUSTOM_OUTPUT_DIR) / f"{folder_name}.zip"
+        if custom_zip_path.exists():
+            logger.info(f"[DELETE] Removing custom ZIP archive: {custom_zip_path}")
+            custom_zip_path.unlink()
+
+    # Проверяем стандартную OUTPUT_DIR
     output_dir = settings.OUTPUT_DIR / folder_name
     if output_dir.exists():
         logger.info(f"[DELETE] Removing output directory: {output_dir}")
@@ -583,6 +597,25 @@ async def preview_pre_trip(
     if not trip.departure_time or not trip.arrival_time:
         warnings.append("Время выезда/приезда не указано")
 
+    # Проверяем существование документов (защита от дубликатов)
+    folder_name = f"{trip.date_from.strftime('%Y-%m-%d')}_{trip.destination_city}"
+    if settings.CUSTOM_OUTPUT_DIR:
+        docs_path = Path(settings.CUSTOM_OUTPUT_DIR) / folder_name / "documents"
+    else:
+        docs_path = settings.OUTPUT_DIR / folder_name / "documents"
+
+    files_exist = []
+    prikaz_path = docs_path / "Приказ.docx"
+    sz_path = docs_path / "Служебная_записка_аванс.docx"
+
+    if prikaz_path.exists():
+        files_exist.append("Приказ.docx")
+    if sz_path.exists():
+        files_exist.append("Служебная_записка_аванс.docx")
+
+    if files_exist:
+        warnings.append(f"Документы уже существуют: {', '.join(files_exist)}. При повторной генерации они будут перезаписаны.")
+
     return {
         "trip_id": trip_id,
         "destination": trip.destination_city,
@@ -596,6 +629,7 @@ async def preview_pre_trip(
         "prikaz_date": (trip.prikaz_date or date.today()).strftime('%d.%m.%Y'),
         "sz_date": (trip.sz_date or date.today()).strftime('%d.%m.%Y'),
         "pre_trip_docs_generated": trip.pre_trip_docs_generated,
+        "files_exist": files_exist,
         "warnings": warnings,
         "can_generate": True  # Всегда можно генерировать ДО поездки
     }
@@ -642,8 +676,14 @@ async def generate_pre_trip_documents(
             'sz_date': trip.sz_date or date.today(),
         }
 
+        # Определяем директорию для сохранения
+        custom_dir = None
+        if settings.CUSTOM_OUTPUT_DIR:
+            custom_dir = Path(settings.CUSTOM_OUTPUT_DIR)
+            custom_dir.mkdir(parents=True, exist_ok=True)
+
         generator = SimpleDocumentGenerator(settings.TEMPLATES_DIR, settings.OUTPUT_DIR)
-        result = generator.generate_pre_trip(trip_data)
+        result = generator.generate_pre_trip(trip_data, custom_output_dir=custom_dir)
 
         # Обновляем флаг в БД
         trip.pre_trip_docs_generated = True
@@ -655,7 +695,8 @@ async def generate_pre_trip_documents(
         return {
             "message": "Документы ДО поездки успешно созданы",
             "files": result,
-            "documents": ["Приказ", "Служебная записка (аванс)"]
+            "documents": ["Приказ", "Служебная записка (аванс)"],
+            "folder": result.get('folder', '')
         }
 
     except Exception as e:
@@ -730,6 +771,25 @@ async def preview_post_trip(
     # СЗ на доплату нужна только если to_return < 0
     needs_sz_dopay = to_return < 0
 
+    # Проверяем существование документов (защита от дубликатов)
+    folder_name = f"{trip.date_from.strftime('%Y-%m-%d')}_{trip.destination_city}"
+    if settings.CUSTOM_OUTPUT_DIR:
+        docs_path = Path(settings.CUSTOM_OUTPUT_DIR) / folder_name / "documents"
+    else:
+        docs_path = settings.OUTPUT_DIR / folder_name / "documents"
+
+    files_exist = []
+    ao_path = docs_path / "Авансовый_отчет.xlsx"
+    sz_dopay_path = docs_path / "Служебная_записка_доплата.docx"
+
+    if ao_path.exists():
+        files_exist.append("Авансовый_отчет.xlsx")
+    if sz_dopay_path.exists():
+        files_exist.append("Служебная_записка_доплата.docx")
+
+    if files_exist:
+        warnings.append(f"Документы уже существуют: {', '.join(files_exist)}. При повторной генерации они будут перезаписаны.")
+
     return {
         "trip_id": trip_id,
         "destination": trip.destination_city,
@@ -749,6 +809,7 @@ async def preview_post_trip(
         "balance_status": "К возврату" if to_return > 0 else ("К доплате" if to_return < 0 else "В ноль"),
         "ao_date": (trip.ao_date or date.today()).strftime('%d.%m.%Y'),
         "post_trip_docs_generated": trip.post_trip_docs_generated,
+        "files_exist": files_exist,
         "warnings": warnings,
         "errors": errors,
         "can_generate": len(errors) == 0
@@ -844,8 +905,14 @@ async def generate_post_trip_documents(
             ]
         }
 
+        # Определяем директорию для сохранения
+        custom_dir = None
+        if settings.CUSTOM_OUTPUT_DIR:
+            custom_dir = Path(settings.CUSTOM_OUTPUT_DIR)
+            custom_dir.mkdir(parents=True, exist_ok=True)
+
         generator = SimpleDocumentGenerator(settings.TEMPLATES_DIR, settings.OUTPUT_DIR)
-        result = generator.generate_post_trip(trip_data)
+        result = generator.generate_post_trip(trip_data, custom_output_dir=custom_dir)
 
         # Обновляем флаг в БД
         trip.post_trip_docs_generated = True
@@ -862,7 +929,8 @@ async def generate_post_trip_documents(
             "files": result,
             "documents": documents,
             "to_return": to_return,
-            "needs_sz_dopay": result.get('needs_sz_dopay', False)
+            "needs_sz_dopay": result.get('needs_sz_dopay', False),
+            "folder": result.get('folder', '')
         }
 
     except HTTPException:
@@ -896,9 +964,13 @@ async def download_trip_package(
             detail="Trip not found"
         )
 
-    # Путь к ZIP файлу
-    folder_name = f"{trip.date_from.strftime('%Y-%m-%d')}_{trip.destination_city}_{current_user.fio.split()[0]}"
-    zip_path = settings.OUTPUT_DIR / f"{folder_name}.zip"
+    # Путь к ZIP файлу - используем CUSTOM_OUTPUT_DIR если указан
+    folder_name = f"{trip.date_from.strftime('%Y-%m-%d')}_{trip.destination_city}"
+
+    if settings.CUSTOM_OUTPUT_DIR:
+        zip_path = Path(settings.CUSTOM_OUTPUT_DIR) / f"{folder_name}.zip"
+    else:
+        zip_path = settings.OUTPUT_DIR / f"{folder_name}.zip"
 
     if not zip_path.exists():
         raise HTTPException(
@@ -911,3 +983,225 @@ async def download_trip_package(
         media_type='application/zip',
         filename=f"{folder_name}.zip"
     )
+
+
+@router.get("/{trip_id}/download-file/{file_type}")
+async def download_single_file(
+    trip_id: int,
+    file_type: str,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Скачать отдельный файл:
+    - prikaz: Приказ.docx
+    - sz_advance: Служебная_записка_аванс.docx
+    - ao: Авансовый_отчет.xlsx
+    - sz_dopay: Служебная_записка_доплата.docx
+    """
+    trip = db.query(Trip).filter(
+        Trip.id == trip_id,
+        Trip.user_id == current_user.id
+    ).first()
+
+    if not trip:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found")
+
+    folder_name = f"{trip.date_from.strftime('%Y-%m-%d')}_{trip.destination_city}"
+
+    # Используем CUSTOM_OUTPUT_DIR если указан, иначе OUTPUT_DIR
+    if settings.CUSTOM_OUTPUT_DIR:
+        base_path = Path(settings.CUSTOM_OUTPUT_DIR) / folder_name / "documents"
+    else:
+        base_path = settings.OUTPUT_DIR / folder_name / "documents"
+
+    logger.info(f"[DOWNLOAD] Looking for file in: {base_path}")
+
+    file_map = {
+        'prikaz': ('Приказ.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+        'sz_advance': ('Служебная_записка_аванс.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+        'ao': ('Авансовый_отчет.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+        'sz_dopay': ('Служебная_записка_доплата.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+        'sz': ('Служебная_записка.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+    }
+
+    if file_type not in file_map:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown file type: {file_type}")
+
+    filename, media_type = file_map[file_type]
+    file_path = base_path / filename
+
+    logger.info(f"[DOWNLOAD] File path: {file_path}, exists: {file_path.exists()}")
+
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File not found: {filename}. Path: {file_path}. Generate documents first."
+        )
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=media_type,
+        filename=filename
+    )
+
+
+@router.get("/{trip_id}/download-pre-trip")
+async def download_pre_trip_files(
+    trip_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Скачать оба файла ДО поездки (Приказ + СЗ) как ZIP архив.
+    """
+    import zipfile
+    import tempfile
+
+    trip = db.query(Trip).filter(
+        Trip.id == trip_id,
+        Trip.user_id == current_user.id
+    ).first()
+
+    if not trip:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found")
+
+    folder_name = f"{trip.date_from.strftime('%Y-%m-%d')}_{trip.destination_city}"
+
+    # Используем CUSTOM_OUTPUT_DIR если указан
+    if settings.CUSTOM_OUTPUT_DIR:
+        base_path = Path(settings.CUSTOM_OUTPUT_DIR) / folder_name / "documents"
+    else:
+        base_path = settings.OUTPUT_DIR / folder_name / "documents"
+
+    files_to_zip = [
+        ('Приказ.docx', base_path / 'Приказ.docx'),
+        ('Служебная_записка_аванс.docx', base_path / 'Служебная_записка_аванс.docx'),
+    ]
+
+    # Проверяем что файлы существуют
+    missing_files = [name for name, path in files_to_zip if not path.exists()]
+    if missing_files:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Файлы не найдены: {', '.join(missing_files)}. Сгенерируйте документы."
+        )
+
+    # Создаем временный ZIP
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp:
+        with zipfile.ZipFile(tmp.name, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for name, path in files_to_zip:
+                zf.write(path, name)
+
+        return FileResponse(
+            path=tmp.name,
+            media_type='application/zip',
+            filename=f"{folder_name}_ДО_поездки.zip"
+        )
+
+
+@router.get("/{trip_id}/download-post-trip")
+async def download_post_trip_files(
+    trip_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Скачать файлы ПОСЛЕ поездки:
+    - Авансовый отчёт
+    - СЗ на доплату (если есть)
+    - ZIP архив чеков
+    """
+    import zipfile
+    import tempfile
+
+    trip = db.query(Trip).filter(
+        Trip.id == trip_id,
+        Trip.user_id == current_user.id
+    ).first()
+
+    if not trip:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found")
+
+    folder_name = f"{trip.date_from.strftime('%Y-%m-%d')}_{trip.destination_city}"
+
+    # Используем CUSTOM_OUTPUT_DIR если указан
+    if settings.CUSTOM_OUTPUT_DIR:
+        base_path = Path(settings.CUSTOM_OUTPUT_DIR) / folder_name
+    else:
+        base_path = settings.OUTPUT_DIR / folder_name
+
+    docs_path = base_path / "documents"
+    receipts_path = base_path / "receipts"
+
+    # Собираем файлы для архива
+    files_to_zip = []
+
+    # АО обязателен
+    ao_path = docs_path / 'Авансовый_отчет.xlsx'
+    if ao_path.exists():
+        files_to_zip.append(('documents/Авансовый_отчет.xlsx', ao_path))
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Авансовый отчёт не найден. Сгенерируйте документы."
+        )
+
+    # СЗ на доплату (опционально)
+    sz_dopay_path = docs_path / 'Служебная_записка_доплата.docx'
+    if sz_dopay_path.exists():
+        files_to_zip.append(('documents/Служебная_записка_доплата.docx', sz_dopay_path))
+
+    # Чеки в папке receipts
+    if receipts_path.exists():
+        for receipt_file in receipts_path.iterdir():
+            if receipt_file.is_file():
+                files_to_zip.append((f'receipts/{receipt_file.name}', receipt_file))
+
+    # Создаем временный ZIP
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp:
+        with zipfile.ZipFile(tmp.name, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for arc_name, path in files_to_zip:
+                zf.write(path, arc_name)
+
+        return FileResponse(
+            path=tmp.name,
+            media_type='application/zip',
+            filename=f"{folder_name}_ПОСЛЕ_поездки.zip"
+        )
+
+
+# ==================== НАСТРОЙКИ ПОЛЬЗОВАТЕЛЯ ====================
+
+class UserOutputDirUpdate(BaseModel):
+    output_dir: str
+
+
+@router.get("/{trip_id}/folder-path")
+async def get_trip_folder_path(
+    trip_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Получить путь к папке командировки"""
+    trip = db.query(Trip).filter(
+        Trip.id == trip_id,
+        Trip.user_id == current_user.id
+    ).first()
+
+    if not trip:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found")
+
+    folder_name = f"{trip.date_from.strftime('%Y-%m-%d')}_{trip.destination_city}"
+
+    # Используем CUSTOM_OUTPUT_DIR если указан
+    if settings.CUSTOM_OUTPUT_DIR:
+        actual_path = str(Path(settings.CUSTOM_OUTPUT_DIR) / folder_name)
+    else:
+        actual_path = str(settings.OUTPUT_DIR / folder_name)
+
+    return {
+        "folder_name": folder_name,
+        "path": actual_path,
+        "custom_output_dir": settings.CUSTOM_OUTPUT_DIR or None
+    }

@@ -19,6 +19,13 @@ from openpyxl import load_workbook
 from num2words import num2words
 import logging
 
+# win32com для работы с Excel (не портит файлы в отличие от openpyxl/xlwings)
+try:
+    import win32com.client as win32
+    HAS_WIN32COM = True
+except ImportError:
+    HAS_WIN32COM = False
+
 
 class SimpleDocumentGenerator:
     """Упрощенный генератор документов с разделением на этапы"""
@@ -29,7 +36,7 @@ class SimpleDocumentGenerator:
 
     def _get_trip_folder(self, trip_data: Dict) -> Path:
         """Возвращает путь к папке командировки"""
-        folder_name = f"{trip_data['date_from'].strftime('%Y-%m-%d')}_{trip_data['destination_city']}_{trip_data['fio'].split()[0]}"
+        folder_name = f"{trip_data['date_from'].strftime('%Y-%m-%d')}_{trip_data['destination_city']}"
         return self.output_dir / folder_name
 
     def _ensure_folder_structure(self, trip_folder: Path) -> None:
@@ -40,7 +47,7 @@ class SimpleDocumentGenerator:
 
     # ==================== ЭТАП 1: ДО ПОЕЗДКИ ====================
 
-    def generate_pre_trip(self, trip_data: Dict) -> Dict[str, str]:
+    def generate_pre_trip(self, trip_data: Dict, custom_output_dir: Optional[Path] = None) -> Dict[str, str]:
         """
         Генерирует документы ДО поездки:
         - Приказ
@@ -48,11 +55,20 @@ class SimpleDocumentGenerator:
 
         Дата документов = prikaz_date или sz_date из trip_data, или сегодня
         Сумма в СЗ = advance_rub (запрашиваемый аванс)
+
+        БЕЗ ZIP архива - только отдельные файлы для скачивания
         """
-        trip_folder = self._get_trip_folder(trip_data)
+        # Используем пользовательскую директорию если указана
+        if custom_output_dir:
+            trip_folder = Path(custom_output_dir) / self._get_folder_name(trip_data)
+        else:
+            trip_folder = self._get_trip_folder(trip_data)
+
         self._ensure_folder_structure(trip_folder)
 
-        results = {}
+        results = {
+            'folder': str(trip_folder)
+        }
 
         # 1. Приказ (дата = prikaz_date или сегодня)
         results['prikaz'] = self._generate_prikaz(trip_data, trip_folder)
@@ -60,10 +76,12 @@ class SimpleDocumentGenerator:
         # 2. Служебная записка на аванс
         results['sz_advance'] = self._generate_sz_advance(trip_data, trip_folder)
 
-        # 3. Создаем ZIP
-        results['zip'] = self._create_zip(trip_folder)
-
+        # Этап 1 НЕ создает ZIP - только файлы
         return results
+
+    def _get_folder_name(self, trip_data: Dict) -> str:
+        """Возвращает имя папки для командировки"""
+        return f"{trip_data['date_from'].strftime('%Y-%m-%d')}_{trip_data['destination_city']}"
 
     def _generate_sz_advance(self, trip_data: Dict, output_folder: Path) -> str:
         """
@@ -101,15 +119,9 @@ class SimpleDocumentGenerator:
 
         for paragraph in doc.paragraphs:
             raw_text = paragraph.text
-            text = raw_text.strip()
 
-            if text == "ООО «ВЭМ»":
-                paragraph.text = org_name
-                continue
-
-            if text.startswith("от "):
-                paragraph.text = f"от {fio_short}"
-                continue
+            # НЕ меняем ФИО - берем из шаблона как есть!
+            # Меняем только сумму и дату
 
             updated = sum_pattern.sub(
                 f"сумму {advance_rounded} ({advance_words}) рублей",
@@ -125,7 +137,7 @@ class SimpleDocumentGenerator:
 
     # ==================== ЭТАП 2: ПОСЛЕ ПОЕЗДКИ ====================
 
-    def generate_post_trip(self, trip_data: Dict) -> Dict[str, str]:
+    def generate_post_trip(self, trip_data: Dict, custom_output_dir: Optional[Path] = None) -> Dict[str, str]:
         """
         Генерирует документы ПОСЛЕ поездки:
         - Авансовый отчет
@@ -133,10 +145,17 @@ class SimpleDocumentGenerator:
 
         Возвращает словарь с путями к файлам и флагом needs_sz_dopay
         """
-        trip_folder = self._get_trip_folder(trip_data)
+        # Используем пользовательскую директорию если указана
+        if custom_output_dir:
+            trip_folder = Path(custom_output_dir) / self._get_folder_name(trip_data)
+        else:
+            trip_folder = self._get_trip_folder(trip_data)
+
         self._ensure_folder_structure(trip_folder)
 
-        results = {}
+        results = {
+            'folder': str(trip_folder)
+        }
 
         # 1. Авансовый отчет
         results['ao'] = self._generate_ao(trip_data, trip_folder)
@@ -197,15 +216,9 @@ class SimpleDocumentGenerator:
 
         for paragraph in doc.paragraphs:
             raw_text = paragraph.text
-            text = raw_text.strip()
 
-            if text == "ООО «ВЭМ»":
-                paragraph.text = org_name
-                continue
-
-            if text.startswith("от "):
-                paragraph.text = f"от {fio_short}"
-                continue
+            # НЕ меняем ФИО - берем из шаблона как есть!
+            # Меняем только сумму и дату
 
             updated = sum_pattern.sub(
                 f"сумму {dopay_rounded} ({dopay_words}) рублей",
@@ -254,163 +267,108 @@ class SimpleDocumentGenerator:
         return results
 
     def _generate_prikaz(self, trip_data: Dict, output_folder: Path) -> str:
-        """Генерирует Приказ - заполняет таблицы и нужные поля в шаблоне"""
+        """Генерирует Приказ - заполняет только даты, место и цель командировки.
+        ФИО, табельный номер, отдел, должность - берутся из шаблона без изменений!
+        """
+        logger = logging.getLogger(__name__)
         template_path = self.templates_dir / "prikaz_template.docx"
         output_path = output_folder / "documents" / "Приказ.docx"
 
         doc = Document(template_path)
 
-        org_name = trip_data.get('org_name', 'ООО «ВЭМ»')
-        fio = trip_data['fio']
-        tab_no = trip_data.get('tab_no', '')
-        department = trip_data.get('department', '')
-        position = trip_data.get('position', '')
         destination_org = trip_data['destination_org']
         purpose = trip_data['purpose']
         days = str(trip_data['days'])
+
+        # Конвертируем даты из строк если нужно
         date_from = trip_data['date_from']
         date_to = trip_data['date_to']
 
-        # Дата приказа = prikaz_date или сегодня (НЕ за 2 дня до поездки)
+        logger.info("[PRIKAZ] Raw date_from=%s (type=%s), date_to=%s (type=%s)",
+                    date_from, type(date_from).__name__, date_to, type(date_to).__name__)
+
+        if isinstance(date_from, str):
+            date_from = datetime.strptime(date_from, '%Y-%m-%d').date()
+        elif isinstance(date_from, datetime):
+            date_from = date_from.date()
+
+        if isinstance(date_to, str):
+            date_to = datetime.strptime(date_to, '%Y-%m-%d').date()
+        elif isinstance(date_to, datetime):
+            date_to = date_to.date()
+
+        logger.info("[PRIKAZ] Converted date_from=%s, date_to=%s, days=%s",
+                    date_from, date_to, days)
+
+        # Дата приказа = prikaz_date или сегодня
         order_date = trip_data.get('prikaz_date') or date.today()
-        if isinstance(order_date, datetime):
+        if isinstance(order_date, str):
+            order_date = datetime.strptime(order_date, '%Y-%m-%d').date()
+        elif isinstance(order_date, datetime):
             order_date = order_date.date()
 
         tables = doc.tables
+        logger.info("[PRIKAZ] Found %d tables in document", len(tables))
         if len(tables) >= 8:
-            # Организация
-            tables[0].cell(2, 0).text = org_name
-            tables[0].cell(2, 1).text = org_name
+            # НЕ меняем: организация, ФИО, табельный - берем из шаблона!
             # Дата составления
             tables[1].cell(1, 2).text = order_date.strftime('%d.%m.%Y')
-            # ФИО и табельный
-            tables[2].cell(1, 0).text = fio
-            tables[2].cell(1, 1).text = tab_no
             # Место назначения
             tables[3].cell(0, 0).text = destination_org
             # Количество дней
             tables[4].cell(0, 1).text = days
             # Даты командировки
+            logger.info("[PRIKAZ] Filling dates in table[5]: %s - %s", date_from, date_to)
             self._fill_split_date(tables[5], date_from, date_to)
             # Цель
             tables[6].cell(0, 1).text = purpose
-            # Источник финансирования
-            tables[7].cell(0, 1).text = org_name
             # Дата ознакомления работника
             if len(tables) >= 10:
                 self._fill_ack_date(tables[9], order_date)
 
-        for paragraph in doc.paragraphs:
-            text = paragraph.text.strip()
-            if department and text == "Администрация":
-                paragraph.text = department
-            elif position and text == "Торговый представитель":
-                paragraph.text = position
+        # НЕ меняем отдел и должность - берем из шаблона!
 
         doc.save(output_path)
         return str(output_path)
 
     def _generate_ao(self, trip_data: Dict, output_folder: Path) -> str:
-        """Генерирует Авансовый отчет - прямая запись в ячейки"""
+        """Генерирует Авансовый отчет через win32com (не портит файлы)"""
         template_path = self.templates_dir / "ao_template.xlsx"
         output_path = output_folder / "documents" / "Авансовый_отчет.xlsx"
 
-        try:
-            from win32com import client as win32  # type: ignore
-        except Exception:
-            win32 = None
-
-        if win32:
-            return self._generate_ao_com(
-                win32,
-                template_path,
-                output_path,
-                trip_data
-            )
-
         logger = logging.getLogger(__name__)
-        logger.warning("win32com is not available, falling back to openpyxl for AO generation.")
 
-        # Открываем шаблон
-        wb = load_workbook(template_path, keep_vba=True, data_only=False, keep_links=True)
-        ws = wb.active
+        if not HAS_WIN32COM:
+            logger.error("[AO] win32com not available!")
+            raise RuntimeError("win32com не установлен. Установите: pip install pywin32")
 
-        # Дата оформления документа (ячейка Z13)
-        doc_date = trip_data.get('document_date') or trip_data.get('date_to') or trip_data.get('date_from')
-        if isinstance(doc_date, datetime):
-            doc_date = doc_date.date()
-        if isinstance(doc_date, date):
-            ws["Z13"].value = doc_date.strftime('%d.%m.%y')
+        logger.info("[AO] Generating with win32com...")
 
-        # Маппинг категорий
-        category_names = {
-            'taxi': 'Такси',
-            'fuel': 'Топливо',
-            'hotel': 'Гостиница',
-            'restaurant': 'Автобус',
-            'bus': 'Автобус',
-            'flight': 'Самолет',
-            'airplane': 'Самолет',
-            'train': 'Поезд',
-            'самолет': 'Самолет',
-            'поезд': 'Поезд',
-            'автобус': 'Автобус',
-            'other': 'Представительские'
-        }
-
-        category_order = ['fuel', 'taxi', 'flight', 'airplane', 'train', 'bus', 'hotel', 'restaurant', 'other']
-
-        # Прямая запись в ячейки - строка 63 первая строка таблицы
-        # Колонка P (16) - название, колонка Y (25) - сумма
-        raw_expenses = trip_data.get('expenses_by_category', {})
-        expenses = {}
-        for key, amount in raw_expenses.items():
-            normalized_key = self._normalize_category_key(key)
-            expenses[normalized_key] = (expenses.get(normalized_key, 0) or 0) + (amount or 0)
-        row = 63
-
-        # Очищаем диапазон расходов, чтобы не осталось шаблонных значений
-        for clear_row in range(63, 85):
-            ws.cell(clear_row, 16).value = None
-            ws.cell(clear_row, 25).value = None
-
-        # Заполняем расходы
-        for category in self._ordered_categories(expenses.keys(), category_order):
-            amount = expenses.get(category)
-            if amount and amount > 0:
-                normalized_category = self._normalize_category_key(category)
-                display_category = category_names.get(normalized_category, category)
-                ws.cell(row, 16).value = display_category  # Колонка P
-                ws.cell(row, 25).value = self._to_money(amount)  # Колонка Y
-                row += 1
-
-        # Суточные
-        per_diem = trip_data.get('per_diem_to_pay', 0)
-        if per_diem > 0:
-            ws.cell(row, 16).value = 'Суточные'
-            ws.cell(row, 25).value = self._to_money(per_diem)
-
-        wb.save(output_path)
-        return str(output_path)
-
-    def _generate_ao_com(self, win32, template_path: Path, output_path: Path, trip_data: Dict) -> str:
-        """Генерирует Авансовый отчет через Excel COM (максимальная совместимость)."""
+        # Копируем шаблон
         shutil.copy(template_path, output_path)
 
+        # Открываем через win32com
         excel = win32.Dispatch("Excel.Application")
         excel.Visible = False
         excel.DisplayAlerts = False
-        wb = None
+
         try:
             wb = excel.Workbooks.Open(str(output_path.resolve()))
-            ws = wb.Worksheets(1)
+            ws = wb.Sheets(1)
 
-            doc_date = trip_data.get('document_date') or datetime.today().date()
-            if isinstance(doc_date, datetime):
-                doc_date = doc_date.date()
-            if isinstance(doc_date, date):
-                ws.Range("Z13").Value = doc_date.strftime('%d.%m.%y')
+            # Дата оформления документа (ячейка Z13) = ao_date или сегодня
+            doc_date = trip_data.get('ao_date')
+            if doc_date:
+                if isinstance(doc_date, str):
+                    doc_date = datetime.strptime(doc_date, '%Y-%m-%d').date()
+                elif isinstance(doc_date, datetime):
+                    doc_date = doc_date.date()
+            else:
+                doc_date = date.today()
 
+            ws.Range('Z13').Value = doc_date.strftime('%d.%m.%y')
+
+            # Маппинг категорий
             category_names = {
                 'taxi': 'Такси',
                 'fuel': 'Топливо',
@@ -427,53 +385,51 @@ class SimpleDocumentGenerator:
             }
             category_order = ['fuel', 'taxi', 'flight', 'airplane', 'train', 'bus', 'hotel', 'restaurant', 'other']
 
+            # Очищаем диапазон расходов
             for clear_row in range(63, 85):
-                ws.Range(f"P{clear_row}").Value = ""
-                ws.Range(f"Y{clear_row}").Value = ""
+                ws.Range(f'P{clear_row}').Value = None
+                ws.Range(f'Y{clear_row}').Value = None
 
+            # Заполняем расходы
             row = 63
             raw_expenses = trip_data.get('expenses_by_category', {})
             expenses = {}
             for key, amount in raw_expenses.items():
                 normalized_key = self._normalize_category_key(key)
                 expenses[normalized_key] = (expenses.get(normalized_key, 0) or 0) + (amount or 0)
+
             for category in self._ordered_categories(expenses.keys(), category_order):
                 amount = expenses.get(category)
                 if amount and amount > 0:
                     normalized_category = self._normalize_category_key(category)
                     display_category = category_names.get(normalized_category, category)
-                    ws.Range(f"P{row}").Value = display_category
-                    ws.Range(f"Y{row}").Value = float(self._to_money(amount))
+                    ws.Range(f'P{row}').Value = display_category
+                    ws.Range(f'Y{row}').Value = float(self._to_money(amount))
                     row += 1
 
+            # Суточные
             per_diem = trip_data.get('per_diem_to_pay', 0)
             if per_diem > 0:
-                ws.Range(f"P{row}").Value = "Суточные"
-                ws.Range(f"Y{row}").Value = float(self._to_money(per_diem))
+                ws.Range(f'P{row}').Value = 'Суточные'
+                ws.Range(f'Y{row}').Value = float(self._to_money(per_diem))
 
             wb.Save()
+            wb.Close()
+            logger.info("[AO] File saved successfully: %s", output_path)
             return str(output_path)
         finally:
-            if wb is not None:
-                wb.Close(False)
             excel.Quit()
-            try:
-                import gc
-                gc.collect()
-            except Exception:
-                pass
 
     def _generate_sz(self, trip_data: Dict, output_folder: Path) -> str:
-        """Генерирует Служебную записку"""
+        """Генерирует Служебную записку (старый метод для совместимости)
+        ФИО берется из шаблона - НЕ заменяется!
+        """
         template_path = self.templates_dir / "sz_template.docx"
         output_path = output_folder / "documents" / "Служебная_записка.docx"
 
         logger = logging.getLogger(__name__)
         doc = Document(template_path)
 
-        org_name = trip_data.get('org_name', 'ООО «ВЭМ»')
-        fio = trip_data['fio']
-        fio_short = self._fio_short(fio)
         doc_date = self._calculate_doc_date(trip_data['date_from'])
 
         total_expenses = trip_data.get('total_expenses', 0)
@@ -492,19 +448,10 @@ class SimpleDocumentGenerator:
         sum_pattern = re.compile(r'сумму\s+\d+[\d\s]*\s*\([^)]*\)\s+рублей', re.IGNORECASE)
         date_pattern = re.compile(r'\d{2}\.\d{2}\.\d{4}')
 
-        replaced_sum = 0
-        replaced_date = 0
+        # НЕ меняем ФИО - берем из шаблона как есть!
+        # Меняем только сумму и дату
         for paragraph in doc.paragraphs:
             raw_text = paragraph.text
-            text = raw_text.strip()
-
-            if text == "ООО «ВЭМ»":
-                paragraph.text = org_name
-                continue
-
-            if text.startswith("от "):
-                paragraph.text = f"от {fio_short}"
-                continue
 
             updated = sum_pattern.sub(
                 f"сумму {total_expenses_rounded} ({total_expenses_words}) рублей",
@@ -513,15 +460,7 @@ class SimpleDocumentGenerator:
             updated = date_pattern.sub(doc_date.strftime('%d.%m.%Y'), updated)
 
             if updated != raw_text:
-                if "сумму" in raw_text and "рублей" in raw_text:
-                    replaced_sum += 1
-                    logger.info("[SZ] Replaced sum line: '%s' -> '%s'", raw_text, updated)
-                if raw_text.strip().startswith("Дата"):
-                    replaced_date += 1
-                    logger.info("[SZ] Replaced date line: '%s' -> '%s'", raw_text, updated)
                 paragraph.text = updated
-
-        logger.info("[SZ] replacements: sum=%s date=%s", replaced_sum, replaced_date)
 
         doc.save(output_path)
         return str(output_path)
@@ -632,18 +571,21 @@ class SimpleDocumentGenerator:
                 shutil.copy(source, dest)
 
     def _create_zip(self, trip_folder: Path) -> str:
-        """Создает ZIP архив"""
-        zip_path = trip_folder.parent / f"{trip_folder.name}.zip"
+        """Создает ZIP архив ТОЛЬКО с чеками (не документами)"""
+        zip_path = trip_folder / "receipts.zip"
+        receipts_folder = trip_folder / "receipts"
 
         # Удаляем старый ZIP
         if zip_path.exists():
             zip_path.unlink()
 
+        # Архивируем ТОЛЬКО папку receipts
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for file_path in trip_folder.rglob('*'):
-                if file_path.is_file():
-                    arcname = file_path.relative_to(trip_folder.parent)
-                    zipf.write(file_path, arcname)
+            if receipts_folder.exists():
+                for file_path in receipts_folder.rglob('*'):
+                    if file_path.is_file():
+                        arcname = file_path.relative_to(receipts_folder)
+                        zipf.write(file_path, arcname)
 
         return str(zip_path)
 

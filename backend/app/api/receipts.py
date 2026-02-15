@@ -141,34 +141,44 @@ async def upload_receipt(
     with open(file_path, "wb") as buffer:
         buffer.write(file_bytes)
 
-    # Читаем QR код
+    # Определяем, требуется ли сумма для этого типа документа
+    requires_amount = document_type not in DocumentType.NO_AMOUNT_TYPES
+
+    # Читаем QR код только если требуется сумма (пропускаем OCR для посадочных и подтверждающих)
     qr_reader = QRReader()
     debug_log_path = settings.BASE_DIR / "uploads" / "qr_debug.log"
-    qr_string, qr_data = qr_reader.process_receipt_file(str(file_path))
-    logger.info("[UPLOAD] QR parsed: qr_string=%s qr_data=%s file=%s", bool(qr_string), qr_data, file_path)
-    try:
-        debug_log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(debug_log_path, "a", encoding="utf-8") as debug_log:
-            debug_log.write(f"[UPLOAD] file={file_path} qr_string={bool(qr_string)} qr_data={qr_data}\\n")
-    except Exception as e:
-        logger.error("[UPLOAD] Failed to write debug log: %s", e)
+    qr_string = None
+    qr_data = None
 
-    # Дополнительный fallback: если qr_data не получен, пытаемся распарсить текст/ocr напрямую
-    if not qr_data:
+    if requires_amount:
+        # Распознаём только если нужна сумма
+        qr_string, qr_data = qr_reader.process_receipt_file(str(file_path))
+        logger.info("[UPLOAD] QR parsed: qr_string=%s qr_data=%s file=%s", bool(qr_string), qr_data, file_path)
         try:
-            if file_extension == '.pdf':
-                qr_data = qr_reader.parse_text_from_pdf(str(file_path))
-                logger.info("[UPLOAD] Fallback parse_text_from_pdf: %s", qr_data)
-            elif file_extension in ['.jpg', '.jpeg', '.png', '.bmp']:
-                qr_data = qr_reader.parse_text_from_image(str(file_path))
-                logger.info("[UPLOAD] Fallback parse_text_from_image: %s", qr_data)
-        except Exception as e:
-            logger.error("[UPLOAD] Fallback parse failed: %s", e, exc_info=True)
-        try:
+            debug_log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(debug_log_path, "a", encoding="utf-8") as debug_log:
-                debug_log.write(f"[UPLOAD] fallback file={file_path} qr_data={qr_data}\\n")
+                debug_log.write(f"[UPLOAD] file={file_path} qr_string={bool(qr_string)} qr_data={qr_data}\\n")
         except Exception as e:
-            logger.error("[UPLOAD] Failed to write fallback debug log: %s", e)
+            logger.error("[UPLOAD] Failed to write debug log: %s", e)
+
+        # Дополнительный fallback: если qr_data не получен, пытаемся распарсить текст/ocr напрямую
+        if not qr_data:
+            try:
+                if file_extension == '.pdf':
+                    qr_data = qr_reader.parse_text_from_pdf(str(file_path))
+                    logger.info("[UPLOAD] Fallback parse_text_from_pdf: %s", qr_data)
+                elif file_extension in ['.jpg', '.jpeg', '.png', '.bmp']:
+                    qr_data = qr_reader.parse_text_from_image(str(file_path))
+                    logger.info("[UPLOAD] Fallback parse_text_from_image: %s", qr_data)
+            except Exception as e:
+                logger.error("[UPLOAD] Fallback parse failed: %s", e, exc_info=True)
+            try:
+                with open(debug_log_path, "a", encoding="utf-8") as debug_log:
+                    debug_log.write(f"[UPLOAD] fallback file={file_path} qr_data={qr_data}\\n")
+            except Exception as e:
+                logger.error("[UPLOAD] Failed to write fallback debug log: %s", e)
+    else:
+        logger.info("[UPLOAD] Skipping OCR for document without amount: %s", file_path)
 
     warnings = []
 
@@ -186,15 +196,13 @@ async def upload_receipt(
             logger.warning("[UPLOAD] Amount invalid: %s for file %s", amount_value, file_path)
             qr_data['amount'] = None
 
-    if not qr_data or qr_data.get('amount') is None:
+    # Предупреждение о сумме только если она требуется
+    if requires_amount and (not qr_data or qr_data.get('amount') is None):
         warnings.append("amount_missing")
         logger.warning("[UPLOAD] Amount not detected for file %s", file_path)
 
     # Получаем относительный путь для БД
     relative_path = file_path.relative_to(settings.BASE_DIR)
-
-    # Определяем, требуется ли сумма для этого типа документа
-    requires_amount = document_type not in DocumentType.NO_AMOUNT_TYPES
 
     # Создаем запись в БД
     receipt = Receipt(

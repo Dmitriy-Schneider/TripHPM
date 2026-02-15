@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Система отчетов о командировках</title>
     <link rel="stylesheet" href="/css/style.css">
+    <!-- Flatpickr для выбора диапазона дат -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/light.css">
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ru.js"></script>
 </head>
 <body>
     <!-- Навигация -->
@@ -116,13 +121,9 @@
                 </div>
 
                 <div class="form-row">
-                    <div class="form-group">
-                        <label>Дата отправления *</label>
-                        <input type="date" id="tripDateFrom" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Дата возвращения *</label>
-                        <input type="date" id="tripDateTo" required>
+                    <div class="form-group" style="flex: 1;">
+                        <label>Даты командировки *</label>
+                        <input type="text" id="tripDateRange" placeholder="Выберите даты" required readonly>
                     </div>
                 </div>
 
@@ -201,13 +202,9 @@
                 </div>
 
                 <div class="form-row">
-                    <div class="form-group">
-                        <label>Дата отправления *</label>
-                        <input type="date" id="editTripDateFrom" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Дата возвращения *</label>
-                        <input type="date" id="editTripDateTo" required>
+                    <div class="form-group" style="flex: 1;">
+                        <label>Даты командировки *</label>
+                        <input type="text" id="editTripDateRange" placeholder="Выберите даты" required readonly>
                     </div>
                 </div>
 
@@ -338,33 +335,36 @@
                         <p class="stage-description">Приказ и Служебная записка на получение аванса</p>
                     </div>
 
-                    <div class="stage-info">
-                        <div class="info-row">
-                            <span class="info-label">Сумма аванса:</span>
-                            <span class="info-value" id="preAdvanceAmount">0 ₽</span>
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label">Дата приказа:</span>
-                            <input type="date" id="prikazDateInput" class="date-input-small">
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label">Дата СЗ:</span>
-                            <input type="date" id="szDateInput" class="date-input-small">
-                        </div>
-                    </div>
-
-                    <div class="action-buttons">
+                    <!-- КНОПКИ ВВЕРХУ -->
+                    <div class="action-buttons" style="margin-bottom: 15px;">
                         <button onclick="showPreviewPreTrip()" class="btn btn-primary">
                             👁️ Предпросмотр
                         </button>
                         <button onclick="generatePreTrip()" class="btn btn-success">
                             ✓ Создать Приказ + СЗ
                         </button>
-                        <button onclick="downloadPackage()" class="btn btn-secondary" id="downloadPreBtn" style="display: none;">
-                            ⬇️ Скачать
-                        </button>
                     </div>
+
                     <div id="preDocsStatus"></div>
+
+                    <div class="stage-info">
+                        <div class="info-row">
+                            <span class="info-label">Сумма аванса:</span>
+                            <span class="info-value" id="preAdvanceAmount">0 ₽</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Дата документов:</span>
+                            <input type="date" id="preDocsDateInput" class="date-input-small">
+                        </div>
+                    </div>
+
+                    <div id="preFolderPath" style="margin-top: 10px; padding: 10px; background: #e8f5e9; border-radius: 8px; display: none;">
+                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <strong>📁</strong>
+                            <span id="preFolderPathText" style="font-family: monospace; font-size: 12px; word-break: break-all;"></span>
+                            <button onclick="copyFolderPath('pre')" class="btn btn-small" style="padding: 4px 8px; font-size: 11px;">📋 Копировать</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- ЭТАП 2: ПОСЛЕ ПОЕЗДКИ -->
@@ -372,6 +372,32 @@
                     <div class="stage-header">
                         <h3>📊 Документы ПОСЛЕ поездки</h3>
                         <p class="stage-description">Загрузите чеки и создайте Авансовый отчёт</p>
+                    </div>
+
+                    <!-- КНОПКИ ДЕЙСТВИЙ ВВЕРХУ -->
+                    <div class="documents-section" style="margin-bottom: 15px;">
+                        <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                            <div class="info-row" style="margin: 0;">
+                                <span class="info-label">Дата АО:</span>
+                                <input type="date" id="aoDateInput" class="date-input-small">
+                            </div>
+                            <div class="action-buttons" style="margin: 0;">
+                                <button onclick="showPreviewPostTrip()" class="btn btn-primary">
+                                    👁️ Предпросмотр
+                                </button>
+                                <button onclick="generatePostTrip()" class="btn btn-success">
+                                    ✓ Создать АО
+                                </button>
+                            </div>
+                        </div>
+                        <div id="postDocsStatus" style="margin-top: 10px;"></div>
+                        <div id="postFolderPath" style="margin-top: 10px; padding: 10px; background: #e8f5e9; border-radius: 8px; display: none;">
+                            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                                <strong>📁</strong>
+                                <span id="postFolderPathText" style="font-family: monospace; font-size: 12px; word-break: break-all;"></span>
+                                <button onclick="copyFolderPath('post')" class="btn btn-small" style="padding: 4px 8px; font-size: 11px;">📋 Копировать</button>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Загрузка чеков -->
@@ -406,27 +432,6 @@
                         <div id="receiptsList" class="receipts-list">
                             <!-- Список чеков -->
                         </div>
-                    </div>
-
-                    <!-- Итоги и генерация -->
-                    <div class="documents-section">
-                        <h4>Авансовый отчёт</h4>
-                        <div class="info-row">
-                            <span class="info-label">Дата АО:</span>
-                            <input type="date" id="aoDateInput" class="date-input-small">
-                        </div>
-                        <div class="action-buttons">
-                            <button onclick="showPreviewPostTrip()" class="btn btn-primary">
-                                👁️ Предпросмотр итогов
-                            </button>
-                            <button onclick="generatePostTrip()" class="btn btn-success">
-                                ✓ Создать Авансовый отчёт
-                            </button>
-                            <button onclick="downloadPackage()" class="btn btn-secondary" id="downloadPostBtn" style="display: none;">
-                                ⬇️ Скачать архив
-                            </button>
-                        </div>
-                        <div id="postDocsStatus"></div>
                     </div>
                 </div>
             </div>

@@ -76,8 +76,8 @@ document.addEventListener('DOMContentLoaded', () => {
         showAuth();
     }
 
-    // Инициализируем умный выбор дат
-    initSmartDatePickers();
+    // Инициализируем Flatpickr для выбора диапазона дат
+    initFlatpickr();
 
     const receiptCategory = document.getElementById('receiptCategory');
     const receiptCategoryCustomGroup = document.getElementById('receiptCategoryCustomGroup');
@@ -438,6 +438,17 @@ function formatDate(dateString) {
     return date.toLocaleDateString('ru-RU');
 }
 
+/**
+ * Форматирует дату в локальный формат YYYY-MM-DD (без конвертации в UTC)
+ * Это решает проблему сдвига даты на 1 день при использовании toISOString()
+ */
+function formatLocalDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
 // Показать модальное окно создания командировки
 function showCreateTripModal() {
     const createModal = document.getElementById('createTripModal');
@@ -460,23 +471,28 @@ function showCreateTripModal() {
 function closeCreateTripModal() {
     document.getElementById('createTripModal').style.display = 'none';
     document.getElementById('createTripForm').reset();
+    // Очищаем Flatpickr
+    if (createDatePicker) {
+        createDatePicker.clear();
+    }
 }
 
 // Создание командировки
 async function handleCreateTrip(event) {
     event.preventDefault();
 
-    // Валидация дат
-    const dateFromStr = document.getElementById('tripDateFrom').value;
-    const dateToStr = document.getElementById('tripDateTo').value;
-
-    if (!dateFromStr || !dateToStr) {
-        showNotification('Укажите даты командировки!', 'error');
+    // Получаем выбранные даты из Flatpickr
+    if (!createDatePicker || !createDatePicker.selectedDates || createDatePicker.selectedDates.length !== 2) {
+        showNotification('Выберите даты командировки!', 'error');
         return;
     }
 
-    const dateFrom = new Date(dateFromStr);
-    const dateTo = new Date(dateToStr);
+    const dateFrom = createDatePicker.selectedDates[0];
+    const dateTo = createDatePicker.selectedDates[1];
+
+    // Форматируем даты в формат YYYY-MM-DD (локальное время, без сдвига в UTC)
+    const dateFromStr = formatLocalDate(dateFrom);
+    const dateToStr = formatLocalDate(dateTo);
 
     if (dateTo < dateFrom) {
         showNotification('Ошибка: Дата возвращения должна быть позже даты отправления!', 'error');
@@ -560,47 +576,22 @@ async function viewTrip(tripId) {
     }
 }
 
-// Отображение деталей командировки
+// Отображение деталей командировки (компактный вид)
 function displayTripDetails(trip) {
     document.getElementById('viewTripId').textContent = trip.id;
 
+    // Компактный вид в 2 строки
     const detailsHtml = `
-        <div style="display: flex; justify-content: flex-end; margin-bottom: 15px;">
-            <button onclick="closeViewTripModal(); showEditTripModal(${trip.id})" class="btn btn-secondary">
-                ✏️ Редактировать командировку
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px; background: #f8f9fa; border-radius: 8px; font-size: 13px;">
+            <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+                <span><strong>${trip.destination_city}</strong></span>
+                <span style="color: #666;">${trip.destination_org || ''}</span>
+                <span>${formatDate(trip.date_from)} — ${formatDate(trip.date_to)}</span>
+                <span>Аванс: <strong>${trip.advance_rub} ₽</strong></span>
+            </div>
+            <button onclick="closeViewTripModal(); showEditTripModal(${trip.id})" class="btn btn-secondary btn-small">
+                ✏️ Ред.
             </button>
-        </div>
-        <div class="detail-row">
-            <div class="detail-label">Город:</div>
-            <div class="detail-value">${trip.destination_city}</div>
-        </div>
-        <div class="detail-row">
-            <div class="detail-label">Организация:</div>
-            <div class="detail-value">${trip.destination_org || 'Не указано'}</div>
-        </div>
-        <div class="detail-row">
-            <div class="detail-label">Период:</div>
-            <div class="detail-value">${formatDate(trip.date_from)} - ${formatDate(trip.date_to)}</div>
-        </div>
-        <div class="detail-row">
-            <div class="detail-label">Время отправления:</div>
-            <div class="detail-value">${trip.departure_time || 'Не указано'}</div>
-        </div>
-        <div class="detail-row">
-            <div class="detail-label">Время прибытия:</div>
-            <div class="detail-value">${trip.arrival_time || 'Не указано'}</div>
-        </div>
-        <div class="detail-row">
-            <div class="detail-label">Цель:</div>
-            <div class="detail-value">${trip.purpose}</div>
-        </div>
-        <div class="detail-row">
-            <div class="detail-label">Аванс:</div>
-            <div class="detail-value">${trip.advance_rub} ₽</div>
-        </div>
-        <div class="detail-row">
-            <div class="detail-label">Питание:</div>
-            <div class="detail-value">Завтраки: ${trip.meals_breakfast_count}, Обеды: ${trip.meals_lunch_count}, Ужины: ${trip.meals_dinner_count}</div>
         </div>
     `;
 
@@ -1091,8 +1082,12 @@ function showEditTripModal(tripId, event) {
         document.getElementById('editTripId').value = trip.id;
         document.getElementById('editTripCity').value = trip.destination_city;
         document.getElementById('editTripOrg').value = trip.destination_org || '';
-        document.getElementById('editTripDateFrom').value = trip.date_from;
-        document.getElementById('editTripDateTo').value = trip.date_to;
+
+        // Устанавливаем даты в Flatpickr
+        if (editDatePicker && trip.date_from && trip.date_to) {
+            editDatePicker.setDate([trip.date_from, trip.date_to], true);
+        }
+
         document.getElementById('editTripDepartureTime').value = trip.departure_time || '';
         document.getElementById('editTripArrivalTime').value = trip.arrival_time || '';
         document.getElementById('editTripPurpose').value = trip.purpose;
@@ -1114,6 +1109,10 @@ function showEditTripModal(tripId, event) {
 function closeEditTripModal() {
     document.getElementById('editTripModal').style.display = 'none';
     document.getElementById('editTripForm').reset();
+    // Очищаем Flatpickr
+    if (editDatePicker) {
+        editDatePicker.clear();
+    }
 }
 
 // Обновление командировки
@@ -1122,17 +1121,18 @@ async function handleEditTrip(event) {
 
     const tripId = document.getElementById('editTripId').value;
 
-    // Валидация дат при редактировании
-    const dateFromStr = document.getElementById('editTripDateFrom').value;
-    const dateToStr = document.getElementById('editTripDateTo').value;
-
-    if (!dateFromStr || !dateToStr) {
-        showNotification('Укажите даты командировки!', 'error');
+    // Получаем выбранные даты из Flatpickr
+    if (!editDatePicker || !editDatePicker.selectedDates || editDatePicker.selectedDates.length !== 2) {
+        showNotification('Выберите даты командировки!', 'error');
         return;
     }
 
-    const dateFrom = new Date(dateFromStr);
-    const dateTo = new Date(dateToStr);
+    const dateFrom = editDatePicker.selectedDates[0];
+    const dateTo = editDatePicker.selectedDates[1];
+
+    // Форматируем даты в формат YYYY-MM-DD (локальное время, без сдвига в UTC)
+    const dateFromStr = formatLocalDate(dateFrom);
+    const dateToStr = formatLocalDate(dateTo);
 
     if (dateTo < dateFrom) {
         showNotification('Ошибка: Дата возвращения должна быть позже даты отправления!', 'error');
@@ -1463,149 +1463,66 @@ async function saveReceiptInline(receiptId) {
     }
 }
 
-// ========== УМНЫЙ ВЫБОР ДАТ ==========
+// ========== FLATPICKR ДЛЯ ВЫБОРА ДИАПАЗОНА ДАТ ==========
+
+let createDatePicker = null;
+let editDatePicker = null;
 
 /**
- * Инициализирует умный выбор дат для форм создания и редактирования
- * После выбора даты отправления автоматически открывается дата возвращения
+ * Инициализирует Flatpickr для выбора диапазона дат
  */
-function initSmartDatePickers() {
-    logger.info('Инициализация умного выбора дат');
+function initFlatpickr() {
+    logger.info('Инициализация Flatpickr для выбора диапазона дат');
 
     // Для формы создания командировки
-    const createDateFrom = document.getElementById('tripDateFrom');
-    const createDateTo = document.getElementById('tripDateTo');
-
-    if (createDateFrom && createDateTo) {
-        setupSmartDatePair(createDateFrom, createDateTo, 'create');
+    const createDateInput = document.getElementById('tripDateRange');
+    if (createDateInput && typeof flatpickr !== 'undefined') {
+        createDatePicker = flatpickr(createDateInput, {
+            mode: 'range',
+            locale: 'ru',
+            dateFormat: 'd.m.Y',
+            altInput: true,
+            altFormat: 'd.m.Y',
+            minDate: null, // Разрешаем выбор прошлых дат
+            showMonths: 2,
+            conjunction: ' — ',
+            onChange: function(selectedDates, dateStr, instance) {
+                if (selectedDates.length === 2) {
+                    const days = Math.ceil((selectedDates[1] - selectedDates[0]) / (1000 * 60 * 60 * 24)) + 1;
+                    logger.debug('Выбран диапазон дат', {
+                        from: formatLocalDate(selectedDates[0]),
+                        to: formatLocalDate(selectedDates[1]),
+                        days: days
+                    });
+                }
+            }
+        });
     }
 
     // Для формы редактирования командировки
-    const editDateFrom = document.getElementById('editTripDateFrom');
-    const editDateTo = document.getElementById('editTripDateTo');
-
-    if (editDateFrom && editDateTo) {
-        setupSmartDatePair(editDateFrom, editDateTo, 'edit');
-    }
-}
-
-/**
- * Настраивает пару дат (от-до) с умным поведением
- * @param {HTMLInputElement} dateFromInput - Поле даты отправления
- * @param {HTMLInputElement} dateToInput - Поле даты возвращения
- * @param {string} formType - Тип формы ('create' или 'edit')
- */
-function setupSmartDatePair(dateFromInput, dateToInput, formType) {
-    // Разрешаем выбирать прошлые даты (ничего не ограничиваем по min)
-
-    // При выборе даты отправления
-    dateFromInput.addEventListener('change', function() {
-        const selectedDate = this.value;
-
-        if (selectedDate) {
-            logger.debug('Выбрана дата отправления', { date: selectedDate, form: formType });
-
-            // Устанавливаем минимальную дату возвращения = дата отправления
-            dateToInput.min = selectedDate;
-
-            // Если дата возвращения раньше даты отправления или не выбрана - ставим ту же дату
-            if (!dateToInput.value || dateToInput.value < selectedDate) {
-                dateToInput.value = selectedDate;
+    const editDateInput = document.getElementById('editTripDateRange');
+    if (editDateInput && typeof flatpickr !== 'undefined') {
+        editDatePicker = flatpickr(editDateInput, {
+            mode: 'range',
+            locale: 'ru',
+            dateFormat: 'd.m.Y',
+            altInput: true,
+            altFormat: 'd.m.Y',
+            minDate: null,
+            showMonths: 2,
+            conjunction: ' — ',
+            onChange: function(selectedDates, dateStr, instance) {
+                if (selectedDates.length === 2) {
+                    const days = Math.ceil((selectedDates[1] - selectedDates[0]) / (1000 * 60 * 60 * 24)) + 1;
+                    logger.debug('Выбран диапазон дат (редактирование)', {
+                        from: formatLocalDate(selectedDates[0]),
+                        to: formatLocalDate(selectedDates[1]),
+                        days: days
+                    });
+                }
             }
-
-            // Автоматически фокусируемся на поле даты возвращения
-            setTimeout(() => {
-                dateToInput.focus();
-                dateToInput.click(); // Открываем календарь
-            }, 100);
-        }
-    });
-
-    // При выборе даты возвращения - валидация
-    dateToInput.addEventListener('change', function() {
-        const dateFrom = dateFromInput.value;
-        const dateTo = this.value;
-
-        if (dateFrom && dateTo && dateTo < dateFrom) {
-            showNotification('Дата возвращения не может быть раньше даты отправления!', 'error');
-            this.value = '';
-            logger.warn('Invalid date_to selected', { dateFrom, dateTo });
-        } else if (dateFrom && dateTo) {
-            // Рассчитываем количество дней
-            const days = Math.ceil((new Date(dateTo) - new Date(dateFrom)) / (1000 * 60 * 60 * 24)) + 1;
-            logger.debug('Дата возвращения выбрана', { dateFrom, dateTo, days });
-
-            // Показываем визуальную подсказку о количестве дней
-            showDateRangeSummary(dateFromInput, dateToInput, days);
-        }
-    });
-
-    // Подсветка при фокусе
-    dateFromInput.addEventListener('focus', function() {
-        this.style.borderColor = '#42A5F5';
-        this.style.boxShadow = '0 0 0 3px rgba(66, 165, 245, 0.1)';
-    });
-
-    dateFromInput.addEventListener('blur', function() {
-        this.style.borderColor = '#e0e0e0';
-        this.style.boxShadow = 'none';
-    });
-
-    dateToInput.addEventListener('focus', function() {
-        this.style.borderColor = '#42A5F5';
-        this.style.boxShadow = '0 0 0 3px rgba(66, 165, 245, 0.1)';
-    });
-
-    dateToInput.addEventListener('blur', function() {
-        this.style.borderColor = '#e0e0e0';
-        this.style.boxShadow = 'none';
-    });
-}
-
-/**
- * Показывает краткую информацию о выбранном диапазоне дат
- * @param {HTMLInputElement} dateFromInput
- * @param {HTMLInputElement} dateToInput
- * @param {number} days - Количество дней
- */
-function showDateRangeSummary(dateFromInput, dateToInput, days) {
-    // Ищем или создаем элемент для подсказки
-    let summaryElement = dateToInput.parentElement.querySelector('.date-range-summary');
-
-    if (!summaryElement) {
-        summaryElement = document.createElement('div');
-        summaryElement.className = 'date-range-summary';
-        summaryElement.style.cssText = `
-            margin-top: 8px;
-            padding: 8px 12px;
-            background: #E3F2FD;
-            border-left: 3px solid #42A5F5;
-            border-radius: 4px;
-            font-size: 13px;
-            color: #1976D2;
-            animation: fadeIn 0.3s;
-        `;
-        dateToInput.parentElement.appendChild(summaryElement);
+        });
     }
-
-    const dateFrom = new Date(dateFromInput.value);
-    const dateTo = new Date(dateToInput.value);
-
-    const dateFromFormatted = dateFrom.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
-    const dateToFormatted = dateTo.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
-
-    summaryElement.innerHTML = `
-        📅 <strong>${dateFromFormatted}</strong> → <strong>${dateToFormatted}</strong>
-        <span style="margin-left: 10px; color: #66BB6A;">✓ ${days} ${getDaysWord(days)}</span>
-    `;
-
-    // Автоматически скрываем через 3 секунды
-    setTimeout(() => {
-        if (summaryElement) {
-            summaryElement.style.animation = 'fadeOut 0.3s';
-            setTimeout(() => summaryElement.remove(), 300);
-        }
-    }, 3000);
 }
 
 /**
@@ -1662,15 +1579,13 @@ function showStage(stage) {
  * Обновление информации об этапах в модальном окне
  */
 function updateStageInfo(trip) {
-    // Устанавливаем даты по умолчанию = сегодня
-    const today = new Date().toISOString().split('T')[0];
+    // Устанавливаем даты по умолчанию = сегодня (локальное время)
+    const today = formatLocalDate(new Date());
 
-    const prikazInput = document.getElementById('prikazDateInput');
-    const szInput = document.getElementById('szDateInput');
+    const preDocsInput = document.getElementById('preDocsDateInput');
     const aoInput = document.getElementById('aoDateInput');
 
-    if (prikazInput) prikazInput.value = trip.prikaz_date || today;
-    if (szInput) szInput.value = trip.sz_date || today;
+    if (preDocsInput) preDocsInput.value = trip.prikaz_date || trip.sz_date || today;
     if (aoInput) aoInput.value = trip.ao_date || today;
 
     // Сумма аванса
@@ -1689,11 +1604,13 @@ function updateStageInfo(trip) {
     }
 
     // Показываем кнопки скачивания если документы сгенерированы
-    const downloadPreBtn = document.getElementById('downloadPreBtn');
-    const downloadPostBtn = document.getElementById('downloadPostBtn');
-
-    if (downloadPreBtn) downloadPreBtn.style.display = trip.pre_trip_docs_generated ? 'inline-block' : 'none';
-    if (downloadPostBtn) downloadPostBtn.style.display = trip.post_trip_docs_generated ? 'inline-block' : 'none';
+    // Показываем путь к папке если документы уже сгенерированы
+    if (trip.pre_trip_docs_generated) {
+        fetchAndShowFolderPath('pre');
+    }
+    if (trip.post_trip_docs_generated) {
+        fetchAndShowFolderPath('post');
+    }
 }
 
 // ==================== ЭТАП 1: ДО ПОЕЗДКИ ====================
@@ -1760,10 +1677,10 @@ function displayPreviewPreTrip(data) {
         </table>
 
         <div style="background: #e3f2fd; padding: 15px; border-radius: 8px;">
-            <p style="margin: 0;"><strong>Будут созданы документы:</strong></p>
+            <p style="margin: 0;"><strong>Будут созданы документы (дата: ${data.prikaz_date}):</strong></p>
             <ul style="margin: 10px 0 0 0; padding-left: 20px;">
-                <li>Приказ (дата: ${data.prikaz_date})</li>
-                <li>Служебная записка на аванс (дата: ${data.sz_date})</li>
+                <li>Приказ</li>
+                <li>Служебная записка на аванс</li>
             </ul>
         </div>
     `;
@@ -1800,11 +1717,10 @@ async function generatePreTrip() {
         return;
     }
 
-    // Сохраняем даты документов перед генерацией
-    const prikazDate = document.getElementById('prikazDateInput')?.value;
-    const szDate = document.getElementById('szDateInput')?.value;
+    // Сохраняем дату документов перед генерацией (одна дата для приказа и СЗ)
+    const preDocsDate = document.getElementById('preDocsDateInput')?.value;
 
-    if (prikazDate || szDate) {
+    if (preDocsDate) {
         await fetch(`${API_URL}/trips/${currentTripId}`, {
             method: 'PUT',
             headers: {
@@ -1812,8 +1728,8 @@ async function generatePreTrip() {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                prikaz_date: prikazDate || null,
-                sz_date: szDate || null
+                prikaz_date: preDocsDate,
+                sz_date: preDocsDate
             })
         });
     }
@@ -1833,7 +1749,7 @@ async function generatePreTrip() {
             const statusDiv = document.getElementById('preDocsStatus');
             if (statusDiv) {
                 statusDiv.innerHTML = `
-                    <div style="background: #d4edda; padding: 15px; border-radius: 8px; margin-top: 15px;">
+                    <div style="background: #d4edda; padding: 15px; border-radius: 8px;">
                         <h4 style="color: #155724; margin: 0 0 10px 0;">✓ Документы готовы</h4>
                         <ul style="margin: 0; padding-left: 20px; color: #155724;">
                             ${result.documents.map(d => `<li>${d}</li>`).join('')}
@@ -1842,7 +1758,16 @@ async function generatePreTrip() {
                 `;
             }
 
-            document.getElementById('downloadPreBtn').style.display = 'inline-block';
+            // Показываем путь к папке
+            if (result.folder) {
+                const folderDiv = document.getElementById('preFolderPath');
+                const folderText = document.getElementById('preFolderPathText');
+                if (folderDiv && folderText) {
+                    folderText.textContent = result.folder;
+                    folderDiv.style.display = 'block';
+                }
+            }
+
             document.getElementById('tabPreTrip').classList.add('completed');
         } else {
             const error = await response.json();
@@ -2050,7 +1975,7 @@ async function generatePostTrip() {
                         : '<p style="color: #2e7d32;">Баланс: 0 ₽</p>');
 
                 statusDiv.innerHTML = `
-                    <div style="background: #d4edda; padding: 15px; border-radius: 8px; margin-top: 15px;">
+                    <div style="background: #d4edda; padding: 15px; border-radius: 8px;">
                         <h4 style="color: #155724; margin: 0 0 10px 0;">✓ Документы готовы</h4>
                         <ul style="margin: 0; padding-left: 20px; color: #155724;">
                             ${result.documents.map(d => `<li>${d}</li>`).join('')}
@@ -2060,7 +1985,16 @@ async function generatePostTrip() {
                 `;
             }
 
-            document.getElementById('downloadPostBtn').style.display = 'inline-block';
+            // Показываем путь к папке
+            if (result.folder) {
+                const folderDiv = document.getElementById('postFolderPath');
+                const folderText = document.getElementById('postFolderPathText');
+                if (folderDiv && folderText) {
+                    folderText.textContent = result.folder;
+                    folderDiv.style.display = 'block';
+                }
+            }
+
             document.getElementById('tabPostTrip').classList.add('completed');
         } else {
             const error = await response.json();
@@ -2069,5 +2003,156 @@ async function generatePostTrip() {
     } catch (error) {
         console.error('Generate post-trip error:', error);
         showNotification('Ошибка соединения', 'error');
+    }
+}
+
+/**
+ * Скачивание отдельного файла
+ */
+async function downloadFile(fileType) {
+    if (!currentTripId) {
+        showNotification('Ошибка: не выбрана командировка', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_URL}/trips/${currentTripId}/download-file/${fileType}`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+
+        if (response.ok) {
+            const blob = await response.blob();
+            const contentDisposition = response.headers.get('content-disposition');
+            let filename = `${fileType}.docx`;
+
+            if (contentDisposition) {
+                const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+                if (match && match[1]) {
+                    filename = match[1].replace(/['"]/g, '');
+                }
+            }
+
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            showNotification(`Файл ${filename} скачан`, 'success');
+        } else {
+            const error = await response.json();
+            showNotification(error.detail || 'Ошибка скачивания', 'error');
+        }
+    } catch (error) {
+        console.error('Download file error:', error);
+        showNotification('Ошибка соединения', 'error');
+    }
+}
+
+/**
+ * Скачивание всех файлов ДО поездки (Приказ + СЗ) в ZIP архиве
+ */
+async function downloadPreTripFiles() {
+    if (!currentTripId) {
+        showNotification('Ошибка: не выбрана командировка', 'error');
+        return;
+    }
+
+    try {
+        showNotification('Подготовка файлов...', 'info');
+
+        const response = await fetch(`${API_URL}/trips/${currentTripId}/download-pre-trip`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+
+        if (response.ok) {
+            const blob = await response.blob();
+            const contentDisposition = response.headers.get('content-disposition');
+            let filename = 'pre_trip_docs.zip';
+
+            if (contentDisposition) {
+                const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+                if (match && match[1]) {
+                    filename = decodeURIComponent(match[1].replace(/['"]/g, ''));
+                }
+            }
+
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            showNotification('Приказ и СЗ скачаны', 'success');
+        } else {
+            const error = await response.json();
+            showNotification(error.detail || 'Ошибка скачивания', 'error');
+        }
+    } catch (error) {
+        console.error('Download pre-trip files error:', error);
+        showNotification('Ошибка соединения', 'error');
+    }
+}
+
+/**
+ * Копирование пути к папке с документами в буфер обмена
+ */
+async function copyFolderPath(stage) {
+    if (!currentTripId) {
+        showNotification('Ошибка: не выбрана командировка', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_URL}/trips/${currentTripId}/folder-path`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            const path = data.path;
+
+            // Копируем путь в буфер обмена
+            await navigator.clipboard.writeText(path);
+            showNotification(`Путь скопирован`, 'success');
+        } else {
+            showNotification('Ошибка получения пути', 'error');
+        }
+    } catch (error) {
+        console.error('Copy folder path error:', error);
+        showNotification('Ошибка копирования', 'error');
+    }
+}
+
+/**
+ * Показать путь к папке при загрузке командировки
+ */
+async function fetchAndShowFolderPath(stage) {
+    if (!currentTripId) return;
+
+    try {
+        const response = await fetch(`${API_URL}/trips/${currentTripId}/folder-path`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            const divId = stage === 'pre' ? 'preFolderPath' : 'postFolderPath';
+            const textId = stage === 'pre' ? 'preFolderPathText' : 'postFolderPathText';
+
+            const folderDiv = document.getElementById(divId);
+            const folderText = document.getElementById(textId);
+
+            if (folderDiv && folderText) {
+                folderText.textContent = data.path;
+                folderDiv.style.display = 'block';
+            }
+        }
+    } catch (error) {
+        console.error('Fetch folder path error:', error);
     }
 }
