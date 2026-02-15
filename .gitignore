@@ -42,6 +42,10 @@ wheels/
 *.sqlite
 *.sqlite3
 
+# Конфигурация (содержит секретные ключи)
+.env
+backend/.env
+
 # Загруженные файлы
 uploads/
 outputs/

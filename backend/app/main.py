@@ -9,13 +9,15 @@ from pathlib import Path
 import logging
 import traceback
 from .config import settings
-from .database import engine, Base, SessionLocal
+from .database import engine, Base, SessionLocal, ensure_sqlite_schema
 from .api import auth, trips, receipts, users, logs
 from .models.user import User
 from .utils.auth import get_password_hash
 
 # Создаем таблицы
 Base.metadata.create_all(bind=engine)
+# Подхватываем новые колонки в SQLite без миграций
+ensure_sqlite_schema()
 
 
 def create_test_user():
@@ -126,11 +128,35 @@ async def health():
     return {"status": "healthy"}
 
 
+@app.get("/favicon.ico")
+async def favicon():
+    """Favicon - возвращаем пустой ответ чтобы избежать 404"""
+    favicon_path = frontend_dir / "favicon.ico"
+    if favicon_path.exists():
+        return FileResponse(str(favicon_path))
+    # Если favicon не существует, возвращаем прозрачный 1x1 ico
+    return JSONResponse(content={}, status_code=204)
+
+
 if __name__ == "__main__":
     import uvicorn
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Trip Report System Server")
+    parser.add_argument("--port", type=int, default=settings.PORT, help="Port to run the server on")
+    parser.add_argument("--host", type=str, default=settings.HOST, help="Host to bind to")
+    parser.add_argument("--no-reload", action="store_true", help="Disable auto-reload")
+    args = parser.parse_args()
+
+    print(f"[SERVER] Starting on http://{args.host}:{args.port}")
+    print(f"[SERVER] Auto-reload: {'disabled' if args.no_reload else 'enabled'}")
+    print(f"[SERVER] Debug mode: {settings.DEBUG}")
+
     uvicorn.run(
         "app.main:app",
-        host=settings.HOST,
-        port=settings.PORT,
-        reload=settings.DEBUG
+        host=args.host,
+        port=args.port,
+        reload=not args.no_reload and settings.DEBUG,
+        reload_dirs=["app", str(frontend_dir)] if not args.no_reload else None,
+        reload_includes=["*.py", "*.html", "*.css", "*.js"] if not args.no_reload else None
     )

@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     DEFAULT_PER_DIEM_RATE: float = 2000.0
     DEFAULT_DEPARTURE_CITY: str = "Самара"
 
+    # Пользовательская директория для сохранения документов
+    # Если указана - документы будут сохраняться туда вместо outputs/
+    CUSTOM_OUTPUT_DIR: str = ""
+
     class Config:
         env_file = ".env"
         case_sensitive = True
