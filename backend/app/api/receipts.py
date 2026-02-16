@@ -9,8 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from pathlib import Path
-from typing import Optional
-from datetime import datetime
+from typing import Optional, Union
+from datetime import datetime, date
 import shutil
 import re
 import logging
@@ -45,8 +45,8 @@ def _sha256_file(path: Path) -> str:
 class ReceiptUpdate(BaseModel):
     category: Optional[str] = None
     document_type: Optional[str] = None  # fiscal, boarding, confirmation, etc.
-    amount: Optional[float] = None
-    receipt_date: Optional[datetime] = None
+    amount: Optional[Union[float, int, str]] = None  # Принимаем разные форматы
+    receipt_date: Optional[Union[str, date, datetime]] = None  # Принимаем строку или дату
     org_name: Optional[str] = None
     requires_amount: Optional[bool] = None
 
@@ -267,9 +267,12 @@ async def update_receipt(
 
     # Обновляем поля
     update_data = receipt_data.model_dump(exclude_unset=True)
+
+    # Обработка суммы
     if 'amount' in update_data and update_data['amount'] is not None:
         try:
             amount_value = float(update_data['amount'])
+            update_data['amount'] = amount_value  # Конвертируем в float
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -280,6 +283,24 @@ async def update_receipt(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Сумма должна быть от 0 до 200000 рублей"
             )
+
+    # Обработка даты (может прийти строка в разных форматах)
+    if 'receipt_date' in update_data and update_data['receipt_date'] is not None:
+        date_value = update_data['receipt_date']
+        if isinstance(date_value, str):
+            try:
+                # Пробуем разные форматы
+                if '-' in date_value:
+                    # YYYY-MM-DD (от HTML input)
+                    update_data['receipt_date'] = datetime.strptime(date_value, '%Y-%m-%d')
+                elif '.' in date_value:
+                    # DD.MM.YYYY (русский формат)
+                    update_data['receipt_date'] = datetime.strptime(date_value, '%d.%m.%Y')
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Некорректный формат даты"
+                )
 
     for field, value in update_data.items():
         setattr(receipt, field, value)
