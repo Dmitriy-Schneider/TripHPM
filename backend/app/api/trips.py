@@ -197,7 +197,7 @@ async def get_trips(
 
     trips = db.query(Trip).filter(
         Trip.user_id == current_user.id
-    ).offset(skip).limit(limit).all()
+    ).order_by(Trip.date_from.desc()).offset(skip).limit(limit).all()
 
     return trips
 
