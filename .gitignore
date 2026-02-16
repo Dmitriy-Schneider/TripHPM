@@ -72,3 +72,4 @@ frontend.log
 # OS
 .DS_Store
 Thumbs.db
+.claude/
